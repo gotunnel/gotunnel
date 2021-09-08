@@ -78,7 +78,7 @@ func (c *Client) changeState(value ClientState) {
 func (c *Client) Connect() error {
 
 	// set client state
-	c.changeState(Connecting)
+	// c.changeState(Connecting)
 
 	// Get a TCP connection
 	conn, err := net.Dial("tcp", c.Host+":"+c.Port)
@@ -182,7 +182,7 @@ func (c *Client) Connect() error {
 	log.Println("Tunnel established successfully from client side")
 
 	// update client state
-	c.changeState(Connected)
+	// c.changeState(Connected)
 
 	// Start listening for incoming messages
 	// in a separate goroutine
@@ -201,7 +201,7 @@ func (c *Client) listen(conn *connection) error {
 			c.session.Close()
 
 			// update client state
-			c.changeState(Disconnected)
+			// c.changeState(Disconnected)
 
 			return fmt.Errorf("failure decoding control message: %s", err)
 		}
@@ -217,32 +217,36 @@ func (c *Client) listen(conn *connection) error {
 
 			go func() {
 
-				// Transfer the request to locally running reverse proxy
-				c.transfer(remote)
-
-				// wait for data transfer to finish before closing the stream
-				c.requestWaitGroup.Wait()
-
 				// Close the stream with server
-				remote.Close()
+				defer remote.Close()
+
+				// Tunnel the request to locally running reverse proxy
+				if err := c.tunnel(remote); err != nil {
+					log.Println(err)
+					log.Println("failed to proxy data through tunnel")
+				}
 			}()
 		}
 	}
 }
 
-// Transfer the request to locally running reverse proxy
-func (c *Client) transfer(remoteConnection net.Conn) error {
+// Tunnel the request to locally running reverse proxy
+func (c *Client) tunnel(remoteConnection net.Conn) error {
 
 	// Dial TCP connection with locally running reverse proxy server
 	localConnection, err := net.Dial("tcp", ":"+c.LocalPort)
 	if err != nil {
 		return err
 	}
+	defer localConnection.Close()
 
 	// proxy the request
 	c.requestWaitGroup.Add(2)
 	go proxy(localConnection, remoteConnection, &c.requestWaitGroup)
 	go proxy(remoteConnection, localConnection, &c.requestWaitGroup)
+
+	// wait for data transfer to finish before closing the stream
+	c.requestWaitGroup.Wait()
 
 	return nil
 }

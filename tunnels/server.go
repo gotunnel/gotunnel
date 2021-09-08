@@ -183,8 +183,8 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	// Now that we've completed the handshake,
 	// the tunnel has been established.
-	// Save this connection
 
+	// Save this connection
 	connection := connection{
 		dec:   json.NewDecoder(stream),
 		enc:   json.NewEncoder(stream),
@@ -243,54 +243,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Get the host to which the request has been sent
 	host := r.URL.Hostname()
 
-	// Get the connection associated with that host
-	conn := s.connections.get(host)
-
-	if conn.conn == nil {
-		http.Error(w, "no tunnel exists for this host", http.StatusBadRequest)
-		return
-	}
-
-	// Get the session associated with this token
-	session, err := s.sessions.get(conn.token)
+	stream, err := s.dial(host)
 	if err != nil {
-		http.Error(w, "no sessions exist for this host", http.StatusBadRequest)
-		return
-	}
-
-	msg := Protocol{
-		Action: RequestClientSession,
-		Type:   HTTP,
-	}
-
-	log.Println("Requesting session from client")
-
-	// ask client to open a session to us, so we can accept it
-	if err := conn.send(msg); err != nil {
-		// we might have several issues here, either the stream is closed, or
-		// the session is going be shut down, the underlying connection might
-		// be broken. In all cases, it's not reliable anymore having a client
-		// session.
-		conn.Close()
-		s.connections.delete(*conn)
-		http.Error(w, "connection closed", http.StatusBadRequest)
-		return
-	}
-
-	var stream net.Conn
-	acceptStream := func() error {
-		stream, err = session.Accept()
-		return err
-	}
-
-	// if we don't receive anything from the client, we'll timeout
-	log.Println("Waiting to accept the incomingm session")
-
-	select {
-	case <-async(acceptStream):
-		break
-	case <-time.After(10 * time.Second):
-		http.Error(w, "stream timed out", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -300,12 +255,13 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send the request over that session/stream
-	log.Println("Session opened to client, writing request to client")
+	log.Println("Session opened by client, writing request to client")
 	if err := r.Write(stream); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
+	log.Println("Waiting for tunnelled response of the request from the client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
