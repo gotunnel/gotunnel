@@ -18,10 +18,10 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// ClientState represents client connection state to tunnel server.
+// ClientState represents client connection State to tunnel server.
 type ClientState uint32
 
-// ClientState enumeration.
+// ClientState enumeration
 const (
 	Unknown ClientState = iota
 	Started
@@ -35,14 +35,31 @@ type Client struct {
 
 	// Hostname on which tunnel is listening for public connections.
 	// Example: wahal.tunnel.nhost.io
-	Host                string
-	Port                string
-	LocalPort           string
-	Token               string
+	Address string
+
+	// Local port you want to expose to the outside world.
+	// Port on which you want to receive
+	// incoming proxy requests through the tunnel.
+	Port string
+
+	// Authentication token
+	// Will also be used as a unique identifier
+	// by the server for storing tunnel connection
+	Token string
+
+	// Read-only Channel on which connection's
+	// current state is transmitted to.
+	//
+	// It's advisable to assign this channel,
+	// it allows better debugging on the vendor's side.
+	State chan<- *ClientState
+
+	// Contains the established connection state
+	// connection connection
+
 	session             *yamux.Session
 	requestWaitGroup    sync.WaitGroup
 	connectionWaitGroup sync.WaitGroup
-	state               chan<- *ClientState
 }
 
 // Initialize the client
@@ -51,13 +68,13 @@ type Client struct {
 func (c *Client) Init() error {
 
 	// Ensure the remote host is reachable
-	_, err := net.Dial("tcp", c.Host+":"+c.Port)
+	_, err := net.Dial("tcp", c.Address)
 	if err != nil {
 		return err
 	}
 
 	// Ensure the local host is reachable
-	_, err = net.Dial("tcp", ":"+c.LocalPort)
+	_, err = net.Dial("tcp", ":"+c.Port)
 	if err != nil {
 		return err
 	}
@@ -68,28 +85,25 @@ func (c *Client) Init() error {
 func (c *Client) changeState(value ClientState) {
 	newState := value
 
-	if c.state != nil {
-		select {
-		case c.state <- &newState:
-		default:
-			log.Printf("Dropping state change due to slow reader: %v", newState)
-		}
+	if c.State != nil {
+		c.State <- &newState
 	} else {
-		c.state = make(chan *ClientState)
+		c.State = make(chan *ClientState)
+		c.State <- &newState
 	}
 }
 
 func (c *Client) Connect() error {
 
-	// set client state
+	// set client State
 	c.changeState(Connecting)
 
 	conf := &tls.Config{
 		InsecureSkipVerify: true,
 	}
 
-	// Get a TCP connection
-	conn, err := tls.Dial("tcp", c.Host+":"+c.Port, conf)
+	// Get a TLS connection
+	conn, err := tls.Dial("tcp", c.Address, conf)
 	if err != nil {
 		return err
 	}
@@ -141,7 +155,8 @@ func (c *Client) Connect() error {
 	// open a new stream with server
 	var stream net.Conn
 	openStream := func() error {
-		// this is blocking until client opens a session to us
+
+		// this is blocking until server accepts our session
 		stream, err = c.session.Open()
 		return err
 	}
@@ -183,13 +198,13 @@ func (c *Client) Connect() error {
 		dec:  json.NewDecoder(stream),
 		enc:  json.NewEncoder(stream),
 		conn: stream,
-		host: c.Host,
-		port: c.LocalPort,
+		host: c.Address,
+		port: c.Port,
 	}
 
-	log.Println("Tunnel established successfully from client side")
+	// c.connection = connection
 
-	// update client state
+	// update client State
 	c.changeState(Connected)
 
 	// Start listening for incoming messages
@@ -208,10 +223,10 @@ func (c *Client) listen(conn *connection) error {
 			c.session.GoAway()
 			c.session.Close()
 
-			// update client state
+			// update client State
 			c.changeState(Disconnected)
 
-			return fmt.Errorf("failure decoding control message: %s", err)
+			return fmt.Errorf("failed to unmarshal message from server")
 		}
 
 		switch msg.Action {
@@ -242,7 +257,7 @@ func (c *Client) listen(conn *connection) error {
 func (c *Client) tunnel(remoteConnection net.Conn) error {
 
 	// Dial TCP connection with locally running reverse proxy server
-	localConnection, err := net.Dial("tcp", ":"+c.LocalPort)
+	localConnection, err := net.Dial("tcp", ":"+c.Port)
 	if err != nil {
 		return err
 	}

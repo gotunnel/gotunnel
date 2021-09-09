@@ -277,6 +277,8 @@ func (s *Server) listen(c *connection) {
 			// Delete the connection
 			s.connections.delete(*c)
 
+			log.Println("Deleting connection", c.host)
+
 			if err != io.EOF {
 				log.Printf("decode err: %s", err)
 			}
