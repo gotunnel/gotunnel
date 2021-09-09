@@ -94,7 +94,7 @@ func (c *Client) Connect() error {
 		return err
 	}
 
-	remoteURL := fmt.Sprint("https://", conn.RemoteAddr(), CONNECTION_PATH)
+	remoteURL := fmt.Sprint(scheme(conn), "://", conn.RemoteAddr(), CONNECTION_PATH)
 	req, err := http.NewRequest(http.MethodConnect, remoteURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)

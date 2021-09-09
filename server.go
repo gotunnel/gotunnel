@@ -2,6 +2,7 @@ package tunnels
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,7 +93,7 @@ func StartServer(config *ServerConfig) error {
 		// by the server, because it makes our server vulnerable to man-in-the-middle attacks.
 		// But this has only been done for testing,
 		// and will hopefully be avoided once Nhost adds a verifiable certificate on this server.
-		// http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 		// if the files exist, start the server
 		return http.ListenAndServeTLS(config.Address, config.Certificate, config.Key, server)
@@ -121,9 +122,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.configuration.Auth {
-		// TODO: Add authentication from Nhost DB
-	}
+	// TODO: Add authentication from Nhost DB
+	// if s.configuration.Auth {}
 
 	switch filepath.Clean(r.URL.Path) {
 	case CONNECTION_PATH:
