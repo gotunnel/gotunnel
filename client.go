@@ -2,6 +2,7 @@ package tunnels
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,8 +84,12 @@ func (c *Client) Connect() error {
 	// set client state
 	c.changeState(Connecting)
 
+	conf := &tls.Config{
+		//InsecureSkipVerify: true,
+	}
+
 	// Get a TCP connection
-	conn, err := net.Dial("tcp", c.Host+":"+c.Port)
+	conn, err := tls.Dial("tcp", c.Host+":"+c.Port, conf)
 	if err != nil {
 		return err
 	}
