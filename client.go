@@ -85,7 +85,7 @@ func (c *Client) Connect() error {
 	c.changeState(Connecting)
 
 	conf := &tls.Config{
-		//InsecureSkipVerify: true,
+		InsecureSkipVerify: true,
 	}
 
 	// Get a TCP connection
