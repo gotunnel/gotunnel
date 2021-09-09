@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,38 +30,55 @@ type Server struct {
 	// connCh is used to publish accepted connections for tcp tunnels.
 	// connCh chan net.Conn
 
-	// Port on which the server is publicly listening for incoming requests.
-	// Example: Port 80 on tunnel.nhost.io.
-	Port string
+	// proxy multiplexer
+	mux http.ServeMux
 
-	// httpDirector is provided by ServerConfig, if not nil decorates http requests
+	// Server Configuration
+	configuration *ServerConfig
+}
+
+// Configuration designed by the user.
+type ServerConfig struct {
+
+	// if not nil decorates http requests
 	// before forwarding them to client.
-	// httpDirector func(*http.Request)
+	Director func(*http.Request)
+
+	// Do you want to authenticate every tunnel creation
+	// request from the official Nhost database of users?
+	Auth bool
+
+	// Address on which the server is publicly listening for incoming requests.
+	// Example: tunnel.nhost.io:80.
+	Address string
 }
 
-func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
+// Creates a new server, wrapped in the configuration
+// specified by the user/developer.
+// And starts listening on the new server.
+func StartServer(config *ServerConfig) error {
 
-func NewServer(port string) *Server {
-
-	response := &Server{
-		Port: port,
+	server := &Server{
+		configuration: config,
 		sessions: sessions{
 			mapping: make(map[string]*yamux.Session),
 		},
 	}
 
-	return response
+	return http.ListenAndServe(config.Address, server)
 }
 
 // ServeHTTP is a tunnel that creates a tunnel between a
 // public connection and the client connection.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	// If there is an HTTP Director function,
+	// usually added to decorate/modify the requests,
+	// before tunnelling them through,
+	// then activate it.
+	if s.configuration.Director != nil {
+		s.configuration.Director(r)
+	}
 
 	// TODO: Add more URL validation checks
 	if strings.ToLower(r.Host) == "" {
@@ -70,7 +86,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Add authentication from Nhost DB
+	if s.configuration.Auth {
+		// TODO: Add authentication from Nhost DB
+	}
 
 	switch filepath.Clean(r.URL.Path) {
 	case CONNECTION_PATH:
@@ -191,7 +209,6 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		conn:  stream,
 		token: token,
 		host:  r.URL.Hostname(),
-		port:  strconv.Itoa(GetPort(5000, 9999)),
 	}
 
 	s.connections.Add(connection)
@@ -270,7 +287,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	// Return the response from the client, on the responsewriter
-	log.Println("Response received, writing back to public connection")
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
@@ -281,7 +297,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	// Get the connection associated with that host
 	conn := s.connections.get(host)
 
-	if conn.conn == nil {
+	if conn.token == "" {
 		return nil, errors.New("no tunnel exists for this host")
 	}
 

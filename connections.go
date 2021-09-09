@@ -113,3 +113,33 @@ func (c *connection) send(v interface{}) error {
 
 	return c.enc.Encode(v)
 }
+
+func (c *connection) recv(v interface{}) error {
+	if c.dec == nil {
+		return errors.New("decoder is not initialized")
+	}
+
+	if c.closed {
+		return errors.New("connection is closed")
+	}
+
+	return c.dec.Decode(v)
+}
+
+/*
+// Issue every connection a reverse proxy
+func (c *connection) IssueProxy(mux *http.ServeMux) error {
+
+	origin, err := url.Parse(c.host + ":" + c.port)
+	if err != nil {
+		return err
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(origin)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	})
+
+	return nil
+}
+*/

@@ -31,6 +31,9 @@ const (
 )
 
 type Client struct {
+
+	// Hostname on which tunnel is listening for public connections.
+	// Example: wahal.tunnel.nhost.io
 	Host                string
 	Port                string
 	LocalPort           string
@@ -78,7 +81,7 @@ func (c *Client) changeState(value ClientState) {
 func (c *Client) Connect() error {
 
 	// set client state
-	// c.changeState(Connecting)
+	c.changeState(Connecting)
 
 	// Get a TCP connection
 	conn, err := net.Dial("tcp", c.Host+":"+c.Port)
@@ -182,7 +185,7 @@ func (c *Client) Connect() error {
 	log.Println("Tunnel established successfully from client side")
 
 	// update client state
-	// c.changeState(Connected)
+	c.changeState(Connected)
 
 	// Start listening for incoming messages
 	// in a separate goroutine
@@ -201,7 +204,7 @@ func (c *Client) listen(conn *connection) error {
 			c.session.Close()
 
 			// update client state
-			// c.changeState(Disconnected)
+			c.changeState(Disconnected)
 
 			return fmt.Errorf("failure decoding control message: %s", err)
 		}

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"math/rand"
 	"net"
+	"net/http"
 	"strconv"
 )
 
@@ -59,4 +60,12 @@ func async(fn func() error) <-chan error {
 	}()
 
 	return errChan
+}
+
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
 }
