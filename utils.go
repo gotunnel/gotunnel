@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 )
 
@@ -68,4 +69,10 @@ func copyHeader(dst, src http.Header) {
 			dst.Add(k, v)
 		}
 	}
+}
+
+// validates whether a given folder/file path exists or not
+func pathExists(filePath string) bool {
+	_, err := os.Stat(filePath)
+	return err == nil
 }

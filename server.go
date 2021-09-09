@@ -2,6 +2,7 @@ package tunnels
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,20 @@ type ServerConfig struct {
 	// Address on which the server is publicly listening for incoming requests.
 	// Example: tunnel.nhost.io:80.
 	Address string
+
+	// TLS Certificate File
+	//
+	// If a certificate filepath is passed,
+	// the server will start a TLS listener
+	// for HTTPS connections, instead of HTTP.
+	//
+	Certificate string
+
+	// Certificate key file
+	//
+	// Mandatory to be passed,
+	// if a certificate file has been supplied too.
+	Key string
 }
 
 // Creates a new server, wrapped in the configuration
@@ -65,6 +80,27 @@ func StartServer(config *ServerConfig) error {
 		},
 	}
 
+	if config.Certificate != "" && config.Key != "" {
+
+		// validate whether the files exist or not
+		if !pathExists(config.Certificate) || !pathExists(config.Key) {
+
+			// don't start the server, and return an error
+			return errors.New("either certificate or key file not found")
+		}
+
+		// In an ideal situation, we must avoid disabling verification of certificate
+		// by the server, because it makes our server vulnerable to man-in-the-middle attacks.
+		// But this has only been done for testing,
+		// and will hopefully be avoided once Nhost adds a verifiable certificate on this server.
+		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+
+		// if the files exist, start the server
+		return http.ListenAndServeTLS(config.Address, config.Certificate, config.Key, server)
+	}
+
+	// if certificate and key haven't been supplied,
+	// start a simple HTTP server
 	return http.ListenAndServe(config.Address, server)
 }
 
