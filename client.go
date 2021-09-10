@@ -34,11 +34,11 @@ const (
 type Client struct {
 
 	// Hostname on which tunnel is listening for public connections.
-	// Example: wahal.tunnel.nhost.io
+	// Example: wahal.tunnel.nhost.io:443
 	Address string
 
 	// Local port you want to expose to the outside world.
-	// Port on which you want to receive
+	// Bascially, the port on which you want to receive
 	// incoming proxy requests through the tunnel.
 	Port string
 
@@ -51,13 +51,14 @@ type Client struct {
 	// current state is transmitted to.
 	//
 	// It's advisable to assign this channel,
-	// it allows better debugging on the vendor's side.
+	// for better debugging on the vendor's side.
 	State chan<- *ClientState
 
 	// Contains the established connection state
 	// connection connection
 
-	session             *yamux.Session
+	session *yamux.Session
+
 	requestWaitGroup    sync.WaitGroup
 	connectionWaitGroup sync.WaitGroup
 }
@@ -82,6 +83,7 @@ func (c *Client) Init() error {
 	return nil
 }
 
+// update client's connection states
 func (c *Client) changeState(value ClientState) {
 	newState := value
 
@@ -231,7 +233,6 @@ func (c *Client) listen(conn *connection) error {
 
 		switch msg.Action {
 		case RequestClientSession:
-			log.Println("Opening a new stream on server's request")
 
 			remote, err := c.session.Open()
 			if err != nil {
@@ -277,49 +278,5 @@ func (c *Client) tunnel(remoteConnection net.Conn) error {
 // Pipe the data between two connections
 func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
-
-	log.Printf("tunneling %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
-	n, err := io.Copy(dst, src)
-	log.Printf("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
+	io.Copy(dst, src)
 }
-
-/*
-// Open a new stream on existing session.
-func stream(session *yamux.Session, action string) (net.Conn, error) {
-
-	// Open a new stream
-	var stream net.Conn
-	var err error
-	act := func() error {
-
-		// this is blocking
-		switch action {
-		case "open":
-			stream, err = session.Open()
-		default:
-			stream, err = session.Accept()
-		}
-		return err
-	}
-
-	// if we don't receive anything from the server, we'll timeout
-	select {
-	case err := <-async(act):
-		switch action {
-		case "open":
-			if err != nil {
-				return nil, fmt.Errorf("waiting for session to open failed: %s", err)
-			}
-		}
-		return stream, err
-	case <-time.After(time.Second * 10):
-		switch action {
-		case "open":
-			if stream != nil {
-				stream.Close()
-			}
-		}
-		return nil, errors.New("timeout opening session")
-	}
-}
-*/

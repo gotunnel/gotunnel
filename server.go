@@ -31,9 +31,6 @@ type Server struct {
 	// connCh is used to publish accepted connections for tcp tunnels.
 	// connCh chan net.Conn
 
-	// proxy multiplexer
-	mux http.ServeMux
-
 	// Server Configuration
 	configuration *ServerConfig
 }
@@ -45,9 +42,25 @@ type ServerConfig struct {
 	// before forwarding them to client.
 	Director func(*http.Request)
 
-	// Do you want to authenticate every tunnel creation
-	// request from the official Nhost database of users?
-	Auth bool
+	//
+	// Authenticator function
+	//
+	// A function that you can attach to the server
+	// for authenticating every tunnel creation request,
+	// before you begin the process of creating the tunnel.
+
+	// Example: At Nhost, we want to ascertain that the user
+	// sending a new tunnel creation request from our CLI client,
+	// actually has an Nhost account or not, along with their auth tokens.
+
+	// You can supply your custom authentication function.
+
+	// It takes an HTTP request and returns an error.
+	// If the error is nil, then authentication is complete,
+	// and server will continue with the tunnel creation procedure.
+	// If the error is NOT nil, server will return the error,
+	// to the client, without proceeding ahead with hijacking.
+	Auth func(*http.Request) error
 
 	// Address on which the server is publicly listening for incoming requests.
 	// Example: tunnel.nhost.io:80.
@@ -58,7 +71,6 @@ type ServerConfig struct {
 	// If a certificate filepath is passed,
 	// the server will start a TLS listener
 	// for HTTPS connections, instead of HTTP.
-	//
 	Certificate string
 
 	// Certificate key file
@@ -122,19 +134,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Add authentication from Nhost DB
-	// if s.configuration.Auth {}
+	// If the server configuration has an authenticator function,
+	// trigger that function, before proceeding forward
+	if s.configuration.Auth != nil {
+		if err := s.configuration.Auth(r); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	switch filepath.Clean(r.URL.Path) {
 	case CONNECTION_PATH:
 
-		// check for CONNECT Header
+		// check for CONNECT method
 		if r.Method != http.MethodConnect {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 
-		// initialize tunnel creation
+		// begin tunnel creation
 		if err := s.tunnelCreationHandler(w, r); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
@@ -143,6 +161,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Takes a new HTTP CONNECT method request coming from the client,
+// to initiate the procedure to creating a new tunnel with that client.
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
 	log.Println("Initiating Tunnel Creation")
@@ -292,6 +312,8 @@ func (s *Server) listen(c *connection) {
 	}
 }
 
+// Responsible for tunnelling all incoming requests,
+// if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Get the host to which the request has been sent
@@ -369,7 +391,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	}
 
 	// if we don't receive anything from the client, we'll timeout
-	log.Println("Waiting to accept the incomingm session")
+	log.Println("Waiting to accept the incoming session")
 
 	select {
 	case err := <-async(acceptStream):
