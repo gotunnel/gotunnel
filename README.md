@@ -35,6 +35,20 @@ log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
 }))
 ```
 
+#### Authentication Middleware
+
+A function that you can attach to the server for authenticating every tunnel creation request,
+before you begin the process of creating the tunnel.
+
+Example: At Nhost, we want to ascertain that the user sending a new tunnel creation request from our CLI client,
+actually has an Nhost account or not, along with their auth tokens.
+
+You can supply your custom authentication function.
+
+It takes an HTTP request and returns an error.
+If the error is nil, then authentication is complete, and server will continue with the tunnel creation procedure.
+If the error is NOT nil, server will return the error, to the client, without proceeding ahead with hijacking.
+
 ### Client
 
 Simple client, without listening for state changes for established tunnel.

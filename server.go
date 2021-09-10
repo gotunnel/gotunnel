@@ -43,7 +43,7 @@ type ServerConfig struct {
 	Director func(*http.Request)
 
 	//
-	// Authenticator function
+	// Authentication Middleware For Tunnels
 	//
 	// A function that you can attach to the server
 	// for authenticating every tunnel creation request,
@@ -134,15 +134,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the server configuration has an authenticator function,
-	// trigger that function, before proceeding forward
-	if s.configuration.Auth != nil {
-		if err := s.configuration.Auth(r); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
 	switch filepath.Clean(r.URL.Path) {
 	case CONNECTION_PATH:
 
@@ -173,6 +164,14 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	// Check whether a connection associated with this token already exists
 	if conn := s.connections.exists(token); conn {
 		return errors.New("tunnel for this hostname already exists")
+	}
+
+	// If the server configuration has an Authentication Middleware,
+	// trigger that function, before proceeding forward
+	if s.configuration.Auth != nil {
+		if err := s.configuration.Auth(r); err != nil {
+			return err
+		}
 	}
 
 	// Hijack the CONNECT request connection.
