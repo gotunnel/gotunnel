@@ -40,14 +40,23 @@ log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
 A function that you can attach to the server for authenticating every tunnel creation request,
 before you begin the process of creating the tunnel.
 
-Example: At Nhost, we want to ascertain that the user sending a new tunnel creation request from our CLI client,
-actually has an Nhost account or not, along with their auth tokens.
+Example: At Nhost, we want to ascertain that the user sending a new tunnel creation request from our CLI client, actually has an Nhost account or not, along with their auth tokens.
 
 You can supply your custom authentication function.
 
-It takes an HTTP request and returns an error.
-If the error is nil, then authentication is complete, and server will continue with the tunnel creation procedure.
-If the error is NOT nil, server will return the error, to the client, without proceeding ahead with hijacking.
+It takes an HTTP request and returns an error. If the error is nil, then authentication is complete, and server will continue with the tunnel creation procedure. If the error is NOT nil, server will return the error, to the client, without proceeding ahead with hijacking.
+
+```
+func authenticate (r *http.Request) error {
+    // perform authentication
+}
+
+log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
+        Address:     ":80",
+        Auth: authenticate,
+}))
+```
+
 
 ### Client
 
