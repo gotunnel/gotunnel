@@ -7,13 +7,14 @@ const (
 	HTTP Type = iota + 1
 	TCP
 	WS
+	SSH
 
 	Requested Type = iota
 	Accepted
 	Established
 )
 
-// Custom Nhost tunnelling protocol
+// Custom gotunnel protocol
 type Protocol struct {
 	Type   Type
 	Action Action

@@ -21,18 +21,21 @@ import (
 // tunnel connection. It also listens to control messages from the client.
 type Server struct {
 
-	// Contains all connections established with multiple clients.
+	//	Contains all connections established with multiple clients.
 	connections Connections
 
-	// sessions contains a session per host.
-	// Sessions provides multiplexing over one connection.
+	//	sessions contains a session per host.
+	//	Sessions provides multiplexing over one connection.
 	sessions sessions
 
-	// connCh is used to publish accepted connections for tcp tunnels.
+	//	connCh is used to publish accepted connections for tcp tunnels.
 	// connCh chan net.Conn
 
-	// Server Configuration
+	//	Server Configuration
 	configuration *ServerConfig
+
+	//	Timeout for connection requests
+	timeout time.Duration
 }
 
 // Configuration designed by the user.
@@ -49,9 +52,10 @@ type ServerConfig struct {
 	// for authenticating every tunnel creation request,
 	// before you begin the process of creating the tunnel.
 
-	// Example: At Nhost, we want to ascertain that the user
-	// sending a new tunnel creation request from our CLI client,
-	// actually has an Nhost account or not, along with their auth tokens.
+	// Example: You want to ascertain that the user
+	// sending a new tunnel creation request to your gotunnel server,
+	// actually has a registered account in your service or not,
+	//	along with their auth tokens.
 
 	// You can supply your custom authentication function.
 
@@ -63,7 +67,7 @@ type ServerConfig struct {
 	Auth func(*http.Request) error
 
 	// Address on which the server is publicly listening for incoming requests.
-	// Example: tunnel.nhost.io:80.
+	// Example: tunnel.wah.al:80.
 	Address string
 
 	// TLS Certificate File
@@ -78,6 +82,9 @@ type ServerConfig struct {
 	// Mandatory to be passed,
 	// if a certificate file has been supplied too.
 	Key string
+
+	//	Default timeout for connection requests
+	Timeout time.Duration
 }
 
 // Creates a new server, wrapped in the configuration
@@ -85,11 +92,20 @@ type ServerConfig struct {
 // And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
 
+	timeout := config.Timeout
+
+	//	If no default timeout is specifid,
+	//	use the default value.
+	if config.Timeout != 0 {
+		timeout = DefaultTimeout
+	}
+
 	server := &Server{
 		configuration: config,
 		sessions: sessions{
 			mapping: make(map[string]*yamux.Session),
 		},
+		timeout: timeout,
 	}
 
 	if config.Certificate != "" && config.Key != "" {
@@ -104,7 +120,7 @@ func StartServer(config *ServerConfig) error {
 		// In an ideal situation, we must avoid disabling verification of certificate
 		// by the server, because it makes our server vulnerable to man-in-the-middle attacks.
 		// But this has only been done for testing,
-		// and will hopefully be avoided once Nhost adds a verifiable certificate on this server.
+		// and will hopefully be avoided once we add a verifiable certificate on this server.
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 		// if the files exist, start the server
@@ -231,7 +247,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		if err != nil {
 			return err
 		}
-	case <-time.After(time.Second * 10):
+	case <-time.After(s.timeout):
 		return errors.New("timeout getting session")
 	}
 
@@ -395,7 +411,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	select {
 	case err := <-async(acceptStream):
 		return stream, err
-	case <-time.After(10 * time.Second):
+	case <-time.After(s.timeout):
 		return nil, errors.New("timeout getting session")
 	}
 }

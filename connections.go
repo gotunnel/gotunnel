@@ -21,19 +21,14 @@ type connection struct {
 	conn net.Conn
 
 	// Public subdomain on which tunnel is listening on.
-	// Example: wahal.tunnel.nhost.io
+	// Example: wahal.tunnel.wah.al
 	host string
 
-	//
 	// Port which the connection is locally listening on.
 	// On server side, this will be the randomly assigned port
 	// on which every tunnel is listening for HTTP requests on.
 	// NOT port 80 on which the server is fundamentally listening
 	// for all incoming requests.
-	//
-	// On client side, this will ideally be the port on which
-	// Nhost dev environment reverse proxy is running.
-
 	port string
 
 	// Authentication token sent by client to authorize the tunnel.
@@ -52,9 +47,9 @@ func (c *Connections) Add(conn connection) {
 func (c *Connections) get(host string) *connection {
 	c.Lock()
 	var response *connection
-	for _, item := range c.list {
-		if item.host == host {
-			response = &item
+	for index := 0; index <= len(c.list); index++ {
+		if c.list[index].host == host {
+			response = &c.list[index]
 			break
 		}
 	}
@@ -66,8 +61,8 @@ func (c *Connections) exists(token string) bool {
 
 	c.Lock()
 	var response bool
-	for _, item := range c.list {
-		if item.token == token {
+	for index := 0; index <= len(c.list); index++ {
+		if c.list[index].token == token {
 			response = true
 			break
 		}
@@ -80,8 +75,8 @@ func (c *Connections) delete(conn connection) {
 
 	c.Lock()
 	var i int
-	for index, item := range c.list {
-		if item == conn {
+	for index := 0; index <= len(c.list); index++ {
+		if c.list[index] == conn {
 			i = index
 			break
 		}

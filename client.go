@@ -34,7 +34,7 @@ const (
 type Client struct {
 
 	// Hostname on which tunnel is listening for public connections.
-	// Example: wahal.tunnel.nhost.io:443
+	// Example: wahal.tunnel.wah.al:443
 	Address string
 
 	// Local port you want to expose to the outside world.
@@ -116,7 +116,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
-	// Set the auth token in Nhost tunnel identification header
+	// Set the auth token in gotunnel identification header
 	req.Header.Set(TokenHeader, c.Token)
 
 	// Send the CONNECT Request to request a tunnel from the server
@@ -169,7 +169,7 @@ func (c *Client) Connect() error {
 		if err != nil {
 			return fmt.Errorf("waiting for session to open failed: %s", err)
 		}
-	case <-time.After(time.Second * 10):
+	case <-time.After(DefaultTimeout):
 		if stream != nil {
 			stream.Close()
 		}
