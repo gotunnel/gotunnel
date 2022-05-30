@@ -32,77 +32,122 @@ const (
 	Closed // keep it always last
 )
 
-type Client struct {
+type (
+	Client struct {
 
-	// Hostname on which tunnel is listening for public connections.
-	// Example: https://wahal.tunnel.wah.al:443
-	Address string
+		//	Prased URL of the remote address.
+		remote *url.URL
 
-	//	Prased URL of the remote address.
-	url *url.URL
+		//	Local port you want to expose to the outside world.
+		port string
 
-	// Local port you want to expose to the outside world.
-	// Bascially, the port on which you want to receive
-	// incoming proxy requests through the tunnel.
-	Port string
+		//	Unique identifier for storing the tunnel connection.
+		identifier string
 
-	// Authentication token
-	// Will also be used as a unique identifier
-	// by the server for storing tunnel connection
-	Token string
+		//	Client configuration structure.
+		config *ClientConfig
+		state  chan<- *ClientState
 
-	//	Skip verifying TLS certificate for the server.
-	//	Value should be the same as what you used in server configuration.
-	//	By default, this will be false.
-	InsecureSkipVerify bool
+		// Read-only Channel on which connection's
+		// current state is transmitted to.
 
-	// Read-only Channel on which connection's
-	// current state is transmitted to.
-	//
-	// It's advisable to assign this channel,
-	// for better debugging on the vendor's side.
-	State chan<- *ClientState
+		// Contains the established connection state
+		// connection connection
 
-	// Contains the established connection state
-	// connection connection
+		session *yamux.Session
 
-	session *yamux.Session
+		requestWaitGroup    sync.WaitGroup
+		connectionWaitGroup sync.WaitGroup
 
-	requestWaitGroup    sync.WaitGroup
-	connectionWaitGroup sync.WaitGroup
-
-	//	Custom Logger
-	Logger *logrus.Logger
-}
-
-// Initialize the client
-// make sure configurations are correct
-// and that we can move ahead to connect
-func (c *Client) Init() error {
-
-	// Ensure the remote host is reachable
-	if err := ping(TCP, c.Address); err != nil {
-		return err
+		//	Custom Logger
+		log *logrus.Logger
 	}
 
-	// Ensure the local host is reachable
-	if err := ping(TCP, ":"+c.Port); err != nil {
-		return err
+	//	Client configuration struct
+	ClientConfig struct {
+
+		// Hostname on which tunnel is listening for public connections.
+		// Example: https://wahal.tunnel.wah.al:443
+		Address string
+
+		// Local port you want to expose to the outside world.
+		// Bascially, the port on which you want to receive
+		// incoming proxy requests through the tunnel.
+		Port string
+
+		//	Custom Logger
+		Logger *logrus.Logger
+
+		//	Skip verifying TLS certificate for the server.
+		//	Value should be the same as what you used in server configuration.
+		//	By default, this will be false.
+		InsecureSkipVerify bool
+
+		// Authentication token.
+		// Will also be used as a unique identifier
+		// by the server for storing tunnel connection.
+		Token string
+
+		// Read-only Channel on which connection's
+		// current state is transmitted to.
+		//
+		// It's advisable to assign this channel,
+		// for better debugging on the vendor's side.
+		State chan<- *ClientState
+	}
+)
+
+//	Create a new client from supplied configuration.
+func NewClient(config *ClientConfig) (*Client, error) {
+
+	var err error
+
+	client := &Client{
+		port:       config.Port,
+		identifier: config.Token,
+		config:     config,
 	}
 
-	return nil
+	if config.State != nil {
+		client.state = config.State
+	}
+
+	client.remote, err = url.Parse(config.Address)
+	if err != nil {
+		return client, err
+	}
+
+	//	Initialize a default logger
+	if config.Logger != nil {
+		client.log = config.Logger
+	} else {
+		client.log = logrus.New()
+	}
+
+	return client, nil
 }
 
 // update client's connection states
 func (c *Client) changeState(value ClientState) {
-	newState := value
 
-	if c.State != nil {
-		c.State <- &newState
-	} else {
-		c.State = make(chan *ClientState)
-		c.State <- &newState
+	if c.state != nil {
+		c.state <- &value
 	}
+}
+
+func (c *Client) Init() error {
+
+	// Ensure the remote host is reachable
+	if err := ping(TCP, c.remote.Host); err != nil {
+		return err
+	}
+
+	// Ensure the local host is reachable
+	if err := ping(TCP, ":"+c.port); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) Connect() error {
@@ -110,26 +155,25 @@ func (c *Client) Connect() error {
 	var err error
 	var conn net.Conn
 
-	// set client State
-	c.changeState(Connecting)
-
-	//	Parse the address URL.
-	c.url, err = url.Parse(c.Address)
-	if err != nil {
+	//	Initialize the client.
+	if err := c.Init(); err != nil {
 		return err
 	}
 
+	// set client State
+	c.changeState(Connecting)
+
 	//	Check whether it's a TLS connection.
-	switch c.url.Scheme {
+	switch c.remote.Scheme {
 	case "https", "wss":
 
 		//	TLS configuration
 		conf := &tls.Config{
-			InsecureSkipVerify: c.InsecureSkipVerify,
+			InsecureSkipVerify: c.config.InsecureSkipVerify,
 		}
 
 		// Get a TLS connection
-		conn, err = tls.Dial(getNetwork(TCP), c.url.Host, conf)
+		conn, err = tls.Dial(getNetwork(TCP), c.remote.Host, conf)
 		if err != nil {
 			return err
 		}
@@ -137,20 +181,20 @@ func (c *Client) Connect() error {
 	default:
 
 		// Get a normal TCP connection
-		conn, err = net.Dial(getNetwork(TCP), c.url.Host)
+		conn, err = net.Dial(getNetwork(TCP), c.remote.Host)
 		if err != nil {
 			return err
 		}
 	}
 
-	remoteURL := fmt.Sprint(c.url.Scheme, "://", conn.RemoteAddr(), CONNECTION_PATH)
+	remoteURL := fmt.Sprint(c.remote.Scheme, "://", conn.RemoteAddr(), CONNECTION_PATH)
 	req, err := http.NewRequest(http.MethodConnect, remoteURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
 	// Set the auth token in gotunnel identification header
-	req.Header.Set(TokenHeader, c.Token)
+	req.Header.Set(TokenHeader, c.identifier)
 
 	// Send the CONNECT Request to request a tunnel from the server
 	if err := req.Write(conn); err != nil {
@@ -234,9 +278,9 @@ func (c *Client) Connect() error {
 		dec:   json.NewDecoder(stream),
 		enc:   json.NewEncoder(stream),
 		conn:  stream,
-		host:  c.url.Host,
-		port:  c.Port,
-		token: c.Token,
+		host:  c.remote.Host,
+		port:  c.port,
+		token: c.identifier,
 	}
 
 	// c.connection = connection
@@ -281,8 +325,8 @@ func (c *Client) listen(conn *connection) error {
 
 				// Tunnel the request to locally running reverse proxy
 				if err := c.tunnel(remote); err != nil {
-					c.Logger.Println(err)
-					c.Logger.Println("failed to proxy data through tunnel")
+					c.log.Println(err)
+					c.log.Println("failed to proxy data through tunnel")
 				}
 			}()
 		}
@@ -293,7 +337,7 @@ func (c *Client) listen(conn *connection) error {
 func (c *Client) tunnel(remoteConnection net.Conn) error {
 
 	// Dial TCP connection with locally running reverse proxy server
-	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.Port)
+	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
 	if err != nil {
 		return err
 	}

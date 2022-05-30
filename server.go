@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +22,9 @@ import (
 // tunnel connection. It also listens to control messages from the client.
 type Server struct {
 
+	//	Parsed URL of the public server address.
+	url *url.URL
+
 	//	Contains all connections established with multiple clients.
 	connections Connections
 
@@ -34,7 +36,7 @@ type Server struct {
 	// connCh chan net.Conn
 
 	//	Server Configuration
-	configuration *ServerConfig
+	config *ServerConfig
 
 	//	Timeout for connection requests
 	timeout time.Duration
@@ -43,7 +45,7 @@ type Server struct {
 	log *logrus.Logger
 }
 
-// Configuration designed by the user.
+// Server config specified by the user.
 type ServerConfig struct {
 
 	// if not nil decorates http requests
@@ -78,9 +80,6 @@ type ServerConfig struct {
 	//	then it is mandatory to supply certificate and key file.
 	Address string
 
-	//	Prased URL of the remote address.
-	url *url.URL
-
 	// TLS Certificate File
 	//
 	//	If a secure scheme (ex. HTTPS) is used,
@@ -104,7 +103,7 @@ type ServerConfig struct {
 	Logger *logrus.Logger
 }
 
-// Creates a new server, wrapped in the configuration
+// Creates a new server, wrapped in the config
 // specified by the user/developer.
 // And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
@@ -119,25 +118,27 @@ func StartServer(config *ServerConfig) error {
 
 	var err error
 
-	//	Parse the address URL.
-	config.url, err = url.Parse(config.Address)
-	if err != nil {
-		return err
-	}
-
 	server := &Server{
-		configuration: config,
+		config: config,
 		sessions: sessions{
 			mapping: make(map[string]*yamux.Session),
 		},
 		timeout: timeout,
 	}
 
-	if config.Logger != nil {
-		server.log = config.Logger
+	//	Parse the address URL.
+	server.url, err = url.Parse(config.Address)
+	if err != nil {
+		return err
 	}
 
-	switch config.url.Scheme {
+	if config.Logger != nil {
+		server.log = config.Logger
+	} else {
+		server.log = logrus.New()
+	}
+
+	switch server.url.Scheme {
 	case "https", "wss":
 
 		// validate whether the files exist or not
@@ -154,14 +155,14 @@ func StartServer(config *ServerConfig) error {
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: config.InsecureSkipVerify}
 
 		// if the files exist, start the server
-		server.log.Println("Starting HTTPS server")
-		return http.ListenAndServeTLS(config.url.Host, config.Certificate, config.Key, server)
+		server.log.WithField("hostname", server.url.Host).Println("Starting HTTPS server")
+		return http.ListenAndServeTLS(server.url.Host, config.Certificate, config.Key, server)
 
 	default:
 
 		//	Start a normal HTTP server
-		server.log.Println("Starting HTTP server")
-		return http.ListenAndServe(config.url.Host, server)
+		server.log.WithField("hostname", server.url.Host).Println("Starting HTTP server")
+		return http.ListenAndServe(server.url.Host, server)
 	}
 }
 
@@ -173,8 +174,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// usually added to decorate/modify the requests,
 	// before tunnelling them through,
 	// then activate it.
-	if s.configuration.Director != nil {
-		s.configuration.Director(r)
+	if s.config.Director != nil {
+		s.config.Director(r)
 	}
 
 	// TODO: Add more URL validation checks
@@ -206,20 +207,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to initiate the procedure to creating a new tunnel with that client.
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
-	s.log.Println("Initiating Tunnel Creation")
+	hostname := r.URL.Hostname()
+	s.log.WithField("hostname", hostname).Println("Initiating Tunnel Creation")
 
 	// fetch the auth token the client has sent
 	token := r.Header.Get(TokenHeader)
+
+	if token == "" {
+		return errors.New("token header not found")
+	}
 
 	// Check whether a connection associated with this token already exists
 	if conn := s.connections.exists(token); conn {
 		return errors.New("tunnel for this hostname already exists")
 	}
 
-	// If the server configuration has an Authentication Middleware,
+	// If the server config has an Authentication Middleware,
 	// trigger that function, before proceeding forward
-	if s.configuration.Auth != nil {
-		if err := s.configuration.Auth(r); err != nil {
+	if s.config.Auth != nil {
+		if err := s.config.Auth(r); err != nil {
 			return err
 		}
 	}
@@ -246,7 +252,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	s.log.Println("Starting new session")
+	s.log.WithField("hostname", hostname).Println("Starting new session")
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		return err
@@ -287,7 +293,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	// Now that you have initiated a sessio/stream
 	// the client will send you a handshake request
-	s.log.Println("Initiating handshake protocol")
+	s.log.WithField("hostname", hostname).Println("Initiating handshake protocol")
 	buf := make([]byte, len(HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -329,7 +335,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	// from console.nhost.io, then this is the place where that magic will happen.
 	//
 
-	s.log.Printf("[server] Tunnel established successfully for host %s", connection.host)
+	s.log.WithField("hostname", hostname).Printf("Tunnel established successfully for %s", connection.host)
 	return nil
 }
 
@@ -346,10 +352,10 @@ func (s *Server) listen(c *connection) {
 			// Delete the connection
 			s.connections.delete(*c)
 
-			log.Println("Deleting connection", c.host)
+			s.log.WithField("hostname", c.host).Println("Deleting connection")
 
 			if err != io.EOF {
-				log.Printf("decode err: %s", err)
+				s.log.WithField("hostname", c.host).Printf("decode err: %s", err)
 			}
 			return
 		}
@@ -357,7 +363,7 @@ func (s *Server) listen(c *connection) {
 		// right now we don't do anything with the messages, but because the
 		// underlying connection needs to establihsed, we know when we have
 		// disconnection(above), so we can cleanup the connection.
-		s.log.Printf("msg: %s", msg)
+		s.log.WithField("hostname", c.host).Printf("msg: %s", msg)
 	}
 }
 
@@ -375,18 +381,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		s.log.Println("Closing stream")
+		s.log.WithField("hostname", host).Println("Closing stream")
 		stream.Close()
 	}()
 
 	// Send the request over that session/stream
-	s.log.Println("Session opened by client, writing request to client")
+	s.log.WithField("hostname", host).Println("Session opened by client, writing request to client")
 	if err := r.Write(stream); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	s.log.Println("Waiting for tunnelled response of the request from the client")
+	s.log.WithField("hostname", host).Println("Waiting for tunnelled response of the request from the client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
@@ -420,7 +426,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		Type:   HTTP,
 	}
 
-	s.log.Println("Requesting session from client")
+	s.log.WithField("hostname", host).Println("Requesting session from client")
 
 	// ask client to open a session to us, so we can accept it
 	if err := conn.send(msg); err != nil {
@@ -440,7 +446,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	}
 
 	// if we don't receive anything from the client, we'll timeout
-	s.log.Println("Waiting to accept the incoming session")
+	s.log.WithField("hostname", host).Println("Waiting to accept the incoming session")
 
 	select {
 	case err := <-async(acceptStream):

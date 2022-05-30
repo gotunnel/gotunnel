@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -33,7 +31,6 @@ func TestConnection(t *testing.T) {
 	//	Launch remote proxy server.
 	go StartServer(&ServerConfig{
 		Address: remoteAddr,
-		Logger:  logrus.New(),
 	})
 
 	//	Add a delay to allow servers to start.
@@ -41,18 +38,17 @@ func TestConnection(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		client  Client
+		config  ClientConfig
 		wantErr bool
 	}{
 		{
 			name: "vanilla",
-			client: Client{
+			config: ClientConfig{
 				Address:            remoteAddr,
 				Token:              "secret",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
-				Logger:             logrus.New(),
 			},
 			wantErr: false,
 		},
@@ -61,10 +57,10 @@ func TestConnection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			c := &tt.client
-
-			//	Initialize the client
-			c.Init()
+			c, err := NewClient(&tt.config)
+			if err != nil {
+				t.Errorf("Failed to create client, err = %v, wantErr %v", err, tt.wantErr)
+			}
 
 			//	Start listening on client state channel.
 			wg.Add(1)
@@ -83,6 +79,8 @@ func TestConnection(t *testing.T) {
 						if err := ping(TCP, remoteAddr); err != nil {
 							t.Errorf("Ping failed, error = %v, wantErr %v", err, tt.wantErr)
 						}
+
+						log.Println("Ping Completed")
 
 						wg.Done()
 
