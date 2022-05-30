@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -46,10 +47,10 @@ type (
 
 		//	Client configuration structure.
 		config *ClientConfig
-		state  chan<- *ClientState
 
 		// Read-only Channel on which connection's
 		// current state is transmitted to.
+		state chan<- *ClientState
 
 		// Contains the established connection state
 		// connection connection
@@ -81,6 +82,7 @@ type (
 		//	Skip verifying TLS certificate for the server.
 		//	Value should be the same as what you used in server configuration.
 		//	By default, this will be false.
+		//	Disabling certificate verification makes your connection vulnerable to man-in-the-middle attacks.
 		InsecureSkipVerify bool
 
 		// Authentication token.
@@ -224,9 +226,10 @@ func (c *Client) Connect() error {
 
 	// Now that the server has responded well on your request,
 	// the server should have ideally hijacked your request connect
-	// and might perform a handshake
+	// and might perform a handshake.
 
 	// Setup client side of yamux
+	log.Println("Starting new yamux client")
 	c.session, err = yamux.Client(conn, nil)
 	if err != nil {
 		return err
@@ -244,8 +247,9 @@ func (c *Client) Connect() error {
 	// if we don't receive anything from the server, we'll timeout
 	select {
 	case err := <-async(openStream):
+		log.Println("opening new stream w/ server")
 		if err != nil {
-			return fmt.Errorf("waiting for session to open failed: %s", err)
+			return fmt.Errorf("session could not be opened: %s", err)
 		}
 	case <-time.After(DefaultTimeout):
 		if stream != nil {
@@ -254,7 +258,9 @@ func (c *Client) Connect() error {
 		return errors.New("timeout opening session")
 	}
 
-	// Send a handshake request
+	log.Println("sending handshake request to server")
+	//	Now that you have successfuly opened a session,
+	//	send a handshake request to the server.
 	if _, err := stream.Write([]byte(HandshakeRequest)); err != nil {
 		return fmt.Errorf("writing handshake request failed: %s", err)
 	}

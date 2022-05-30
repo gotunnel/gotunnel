@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -70,8 +71,7 @@ type ServerConfig struct {
 	Auth func(*http.Request) error
 
 	//	Address on which the server is publicly listening for incoming requests.
-	//	Use complete URL string, along with the scheme.
-	//	Example: https://tunnel.wah.al:80.
+	//	Example: :80.
 	//	If a secure scheme (ex. HTTPS) is used,
 	//	then it is mandatory to supply certificate and key file.
 	Address string
@@ -93,15 +93,34 @@ type ServerConfig struct {
 
 	//	Skip verifying TLS certificate for the server.
 	//	By default, this will be false.
+	//	Disabling certificate verification makes your connection vulnerable to man-in-the-middle attacks.
 	InsecureSkipVerify bool
 
 	//	Custom Logger
 	Logger *logrus.Logger
+
+	//	Callback functions which are called at specific checkpoints.
+	//	Each function returns an error.
+	Callbacks Callbacks
 }
 
-// Creates a new server, wrapped in the config
-// specified by the user/developer.
-// And starts listening on the new server.
+//	Functions to be called after hitting specific checkpoints.
+//	Each function takes a response writer and http request.
+//	And returns an error.
+//
+//	Example: Add an `OnConnection` callback function to perform
+//	CRUD operations on your database.
+type Callbacks struct {
+
+	//	This function is called immediately after a tunnel as been established.
+	OnConnection func(http.ResponseWriter, *http.Request) error
+
+	//	This function is called immediately after a tunnel as been dissolved.
+	//	OnDisconnection func(http.ResponseWriter, *http.Request) error
+}
+
+//	Creates a new server, based on the supplied configuration.
+//	And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
 
 	timeout := config.Timeout
@@ -135,10 +154,7 @@ func StartServer(config *ServerConfig) error {
 			return errors.New("either certificate or key file not found")
 		}
 
-		// In an ideal situation, we must avoid disabling verification of certificate
-		// by the server, because it makes our server vulnerable to man-in-the-middle attacks.
-		// But this has only been done for testing,
-		// and will hopefully be avoided once we add a verifiable certificate on this server.
+		//	Disabling verification of certificate makes it vulnerable to man-in-the-middle attacks.
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: config.InsecureSkipVerify}
 
 		// if the files exist, start the server
@@ -237,7 +253,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	s.log.WithField("hostname", hostname).Println("Starting new session")
+	s.log.WithField("hostname", hostname).Println("Starting new yamux server")
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		return err
@@ -270,14 +286,21 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	select {
 	case err := <-async(acceptStream):
 		if err != nil {
+			if session.IsClosed() {
+				log.Printf("TCP closed")
+				break
+			}
+			log.Printf("Yamux accept: %s", err)
 			return err
 		}
 	case <-time.After(s.timeout):
 		return errors.New("timeout getting session")
 	}
 
-	// Now that you have initiated a sessio/stream
-	// the client will send you a handshake request
+	log.Println("accepted stream from client")
+
+	// Now that you have initiated a session/stream
+	// the client will send you a handshake request.
 	s.log.WithField("hostname", hostname).Println("Initiating handshake protocol")
 	buf := make([]byte, len(HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
@@ -309,16 +332,13 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	s.connections.Add(connection)
 
 	// Start listening for incoming messages
-	// in a separate goroutine
+	// in a separate goroutine.
 	go s.listen(&connection)
 
-	// TODO: Call the onConnection callback
-
-	//
-	// IMPORTANT: If we are ever to build Johan's feature
-	// of allowing users to control their local dev environments
-	// from console.nhost.io, then this is the place where that magic will happen.
-	//
+	// Call the OnConnection callback
+	if s.config.Callbacks.OnConnection != nil {
+		s.config.Callbacks.OnConnection(w, r)
+	}
 
 	s.log.WithField("hostname", hostname).Printf("Tunnel established successfully for %s", connection.host)
 	return nil

@@ -35,6 +35,7 @@ For a simple HTTP server, just supply the local port you want to expose.
 ```
 log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
         Address:     ":80",
+        InsecureSkipVerify: true,
 }))
 ```
 
