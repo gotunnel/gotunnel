@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>gotunnel</h1>
+<img src="assets/logo.png" alt="gotunnel" width="150"/>
   <!--
   <a href="https://docs.nhost.io/cli">Website</a>
     <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
@@ -15,21 +15,34 @@
 
 <div align="center">
 
-Importable Go library to expose your localhost to public internet.
+Importable Go library to expose your locally running service to public internet.
 
-[![Build](https://github.com/gotunnel/gotunnel/actions/workflows/build.yaml/badge.svg)](https://github.com/gotunnel/gotunnel/actions/workflows/build.yaml)
-[![Release](https://github.com/gotunnel/gotunnel/actions/workflows/release.yaml/badge.svg)](https://github.com/gotunnel/gotunnel/actions/workflows/release.yaml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gotunnel/gotunnel)](https://goreportcard.com/report/github.com/gotunnel/gotunnel)
   <a href="https://twitter.com/mrinalwahal" target="_blank" rel="noopener noreferrer">
       <img src="https://img.shields.io/twitter/follow/mrinalwahal?style=social" />
     </a>
 
-  <br />
-
 </div>
+
+# Features
+
+- HTTP and HTTPS handling
+- Public Key Authentication
+- SSL Protection
+- Support for Websockets
+
+## Coming Soon
+
+- SSH Tunnels
+- Connection Callbacks
+- Authorized Key Whitelists
+- Registration of Reserved Hosts
+- Rate Limiting Per Connection
+- Load Balancer for the Server
 
 # Contents
 
+- [Features](#features)
 - [Installation](#installation)
   * [Library](#library)
   * [Server](#server)
