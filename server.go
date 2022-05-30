@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,9 +20,6 @@ import (
 // Server is responsible for proxying public connections to the client over a
 // tunnel connection. It also listens to control messages from the client.
 type Server struct {
-
-	//	Parsed URL of the public server address.
-	url *url.URL
 
 	//	Contains all connections established with multiple clients.
 	connections Connections
@@ -116,8 +112,6 @@ func StartServer(config *ServerConfig) error {
 		timeout = DefaultTimeout
 	}
 
-	var err error
-
 	server := &Server{
 		config: config,
 		sessions: sessions{
@@ -126,20 +120,13 @@ func StartServer(config *ServerConfig) error {
 		timeout: timeout,
 	}
 
-	//	Parse the address URL.
-	server.url, err = url.Parse(config.Address)
-	if err != nil {
-		return err
-	}
-
 	if config.Logger != nil {
 		server.log = config.Logger
 	} else {
 		server.log = logrus.New()
 	}
 
-	switch server.url.Scheme {
-	case "https", "wss":
+	if config.Certificate != "" || config.Key != "" {
 
 		// validate whether the files exist or not
 		if !pathExists(config.Certificate) || !pathExists(config.Key) {
@@ -155,15 +142,13 @@ func StartServer(config *ServerConfig) error {
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: config.InsecureSkipVerify}
 
 		// if the files exist, start the server
-		server.log.WithField("hostname", server.url.Host).Println("Starting HTTPS server")
-		return http.ListenAndServeTLS(server.url.Host, config.Certificate, config.Key, server)
-
-	default:
-
-		//	Start a normal HTTP server
-		server.log.WithField("hostname", server.url.Host).Println("Starting HTTP server")
-		return http.ListenAndServe(server.url.Host, server)
+		server.log.Println("Starting HTTPS server")
+		return http.ListenAndServeTLS(server.config.Address, config.Certificate, config.Key, server)
 	}
+
+	//	Start a normal HTTP server
+	server.log.Println("Starting HTTP server")
+	return http.ListenAndServe(server.config.Address, server)
 }
 
 // ServeHTTP is a tunnel that creates a tunnel between a

@@ -41,10 +41,22 @@ func TestConnection(t *testing.T) {
 		config  ClientConfig
 		wantErr bool
 	}{
+		/* 		{
+		   			name: "local",
+		   			config: ClientConfig{
+		   				Address:            remoteAddr,
+		   				Token:              "secret",
+		   				Port:               localPort,
+		   				State:              state,
+		   				InsecureSkipVerify: true,
+		   			},
+		   			wantErr: false,
+		   		},
+		*/
 		{
-			name: "vanilla",
+			name: "hosted",
 			config: ClientConfig{
-				Address:            remoteAddr,
+				Address:            "http://whatever.tunnel.wah.al:8080",
 				Token:              "secret",
 				Port:               localPort,
 				State:              state,
