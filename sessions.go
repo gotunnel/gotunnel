@@ -1,4 +1,4 @@
-package tunnels
+package gotunnel
 
 import (
 	"fmt"

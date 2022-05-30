@@ -1,4 +1,4 @@
-package tunnels
+package gotunnel
 
 import (
 	"crypto/tls"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 func GetPort(low, hi int) int {
@@ -26,7 +27,7 @@ func GetPort(low, hi int) int {
 
 func portAvaiable(port string) bool {
 
-	ln, err := net.Listen("tcp", ":"+port)
+	ln, err := net.Listen(getNetwork(TCP), ":"+port)
 
 	if err != nil {
 		return false
@@ -34,6 +35,17 @@ func portAvaiable(port string) bool {
 
 	ln.Close()
 	return true
+}
+
+//	Dials a connection to ping the server
+func ping(protocol Type, address string) error {
+
+	_, err := net.DialTimeout(getNetwork(protocol), address, time.Duration(1*time.Second))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func scheme(conn net.Conn) (scheme string) {
@@ -45,6 +57,15 @@ func scheme(conn net.Conn) (scheme string) {
 	}
 
 	return
+}
+
+func isTLS(conn net.Conn) bool {
+	switch conn.(type) {
+	case *tls.Conn:
+		return true
+	default:
+		return false
+	}
 }
 
 // async is a helper function to convert a blocking function to a function

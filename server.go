@@ -1,4 +1,4 @@
-package tunnels
+package gotunnel
 
 import (
 	"bufio"
@@ -10,11 +10,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/sirupsen/logrus"
 )
 
 // Server is responsible for proxying public connections to the client over a
@@ -36,6 +38,9 @@ type Server struct {
 
 	//	Timeout for connection requests
 	timeout time.Duration
+
+	//	Custom Logger
+	log *logrus.Logger
 }
 
 // Configuration designed by the user.
@@ -52,9 +57,9 @@ type ServerConfig struct {
 	// for authenticating every tunnel creation request,
 	// before you begin the process of creating the tunnel.
 
-	// Example: You want to ascertain that the user
-	// sending a new tunnel creation request to your gotunnel server,
-	// actually has a registered account in your service or not,
+	//	Example: You want to ascertain that the user
+	//	sending a new tunnel creation request to your gotunnel server,
+	//	actually has a registered account in your service or not,
 	//	along with their auth tokens.
 
 	// You can supply your custom authentication function.
@@ -66,25 +71,37 @@ type ServerConfig struct {
 	// to the client, without proceeding ahead with hijacking.
 	Auth func(*http.Request) error
 
-	// Address on which the server is publicly listening for incoming requests.
-	// Example: tunnel.wah.al:80.
+	//	Address on which the server is publicly listening for incoming requests.
+	//	Use complete URL string, along with the scheme.
+	//	Example: https://tunnel.wah.al:80.
+	//	If a secure scheme (ex. HTTPS) is used,
+	//	then it is mandatory to supply certificate and key file.
 	Address string
+
+	//	Prased URL of the remote address.
+	url *url.URL
 
 	// TLS Certificate File
 	//
-	// If a certificate filepath is passed,
-	// the server will start a TLS listener
-	// for HTTPS connections, instead of HTTP.
+	//	If a secure scheme (ex. HTTPS) is used,
+	//	then it is mandatory to supply certificate and key file.
 	Certificate string
 
 	// Certificate key file
 	//
-	// Mandatory to be passed,
-	// if a certificate file has been supplied too.
+	//	If a secure scheme (ex. HTTPS) is used,
+	//	then it is mandatory to supply certificate and key file.
 	Key string
 
 	//	Default timeout for connection requests
 	Timeout time.Duration
+
+	//	Skip verifying TLS certificate for the server.
+	//	By default, this will be false.
+	InsecureSkipVerify bool
+
+	//	Custom Logger
+	Logger *logrus.Logger
 }
 
 // Creates a new server, wrapped in the configuration
@@ -100,6 +117,14 @@ func StartServer(config *ServerConfig) error {
 		timeout = DefaultTimeout
 	}
 
+	var err error
+
+	//	Parse the address URL.
+	config.url, err = url.Parse(config.Address)
+	if err != nil {
+		return err
+	}
+
 	server := &Server{
 		configuration: config,
 		sessions: sessions{
@@ -108,7 +133,12 @@ func StartServer(config *ServerConfig) error {
 		timeout: timeout,
 	}
 
-	if config.Certificate != "" && config.Key != "" {
+	if config.Logger != nil {
+		server.log = config.Logger
+	}
+
+	switch config.url.Scheme {
+	case "https", "wss":
 
 		// validate whether the files exist or not
 		if !pathExists(config.Certificate) || !pathExists(config.Key) {
@@ -121,15 +151,18 @@ func StartServer(config *ServerConfig) error {
 		// by the server, because it makes our server vulnerable to man-in-the-middle attacks.
 		// But this has only been done for testing,
 		// and will hopefully be avoided once we add a verifiable certificate on this server.
-		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: config.InsecureSkipVerify}
 
 		// if the files exist, start the server
-		return http.ListenAndServeTLS(config.Address, config.Certificate, config.Key, server)
-	}
+		server.log.Println("Starting HTTPS server")
+		return http.ListenAndServeTLS(config.url.Host, config.Certificate, config.Key, server)
 
-	// if certificate and key haven't been supplied,
-	// start a simple HTTP server
-	return http.ListenAndServe(config.Address, server)
+	default:
+
+		//	Start a normal HTTP server
+		server.log.Println("Starting HTTP server")
+		return http.ListenAndServe(config.url.Host, server)
+	}
 }
 
 // ServeHTTP is a tunnel that creates a tunnel between a
@@ -162,6 +195,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// begin tunnel creation
 		if err := s.tunnelCreationHandler(w, r); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	default:
 		s.handleHTTP(w, r)
@@ -172,7 +206,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to initiate the procedure to creating a new tunnel with that client.
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
-	log.Println("Initiating Tunnel Creation")
+	s.log.Println("Initiating Tunnel Creation")
 
 	// fetch the auth token the client has sent
 	token := r.Header.Get(TokenHeader)
@@ -212,7 +246,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	log.Println("Starting new session")
+	s.log.Println("Starting new session")
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		return err
@@ -253,7 +287,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	// Now that you have initiated a sessio/stream
 	// the client will send you a handshake request
-	log.Println("Initiating handshake protocol")
+	s.log.Println("Initiating handshake protocol")
 	buf := make([]byte, len(HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -295,7 +329,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	// from console.nhost.io, then this is the place where that magic will happen.
 	//
 
-	log.Printf("[server] Tunnel established successfully for host %s", connection.host)
+	s.log.Printf("[server] Tunnel established successfully for host %s", connection.host)
 	return nil
 }
 
@@ -323,7 +357,7 @@ func (s *Server) listen(c *connection) {
 		// right now we don't do anything with the messages, but because the
 		// underlying connection needs to establihsed, we know when we have
 		// disconnection(above), so we can cleanup the connection.
-		log.Printf("msg: %s", msg)
+		s.log.Printf("msg: %s", msg)
 	}
 }
 
@@ -341,18 +375,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		log.Println("Closing stream")
+		s.log.Println("Closing stream")
 		stream.Close()
 	}()
 
 	// Send the request over that session/stream
-	log.Println("Session opened by client, writing request to client")
+	s.log.Println("Session opened by client, writing request to client")
 	if err := r.Write(stream); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	log.Println("Waiting for tunnelled response of the request from the client")
+	s.log.Println("Waiting for tunnelled response of the request from the client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
@@ -386,7 +420,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		Type:   HTTP,
 	}
 
-	log.Println("Requesting session from client")
+	s.log.Println("Requesting session from client")
 
 	// ask client to open a session to us, so we can accept it
 	if err := conn.send(msg); err != nil {
@@ -406,7 +440,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	}
 
 	// if we don't receive anything from the client, we'll timeout
-	log.Println("Waiting to accept the incoming session")
+	s.log.Println("Waiting to accept the incoming session")
 
 	select {
 	case err := <-async(acceptStream):

@@ -1,4 +1,4 @@
-package tunnels
+package gotunnel
 
 import (
 	"bufio"
@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"log"
+	"net/url"
 
 	"github.com/hashicorp/yamux"
+	"github.com/sirupsen/logrus"
 )
 
 // ClientState represents client connection State to tunnel server.
@@ -34,8 +35,11 @@ const (
 type Client struct {
 
 	// Hostname on which tunnel is listening for public connections.
-	// Example: wahal.tunnel.wah.al:443
+	// Example: https://wahal.tunnel.wah.al:443
 	Address string
+
+	//	Prased URL of the remote address.
+	url *url.URL
 
 	// Local port you want to expose to the outside world.
 	// Bascially, the port on which you want to receive
@@ -46,6 +50,11 @@ type Client struct {
 	// Will also be used as a unique identifier
 	// by the server for storing tunnel connection
 	Token string
+
+	//	Skip verifying TLS certificate for the server.
+	//	Value should be the same as what you used in server configuration.
+	//	By default, this will be false.
+	InsecureSkipVerify bool
 
 	// Read-only Channel on which connection's
 	// current state is transmitted to.
@@ -61,6 +70,9 @@ type Client struct {
 
 	requestWaitGroup    sync.WaitGroup
 	connectionWaitGroup sync.WaitGroup
+
+	//	Custom Logger
+	Logger *logrus.Logger
 }
 
 // Initialize the client
@@ -69,14 +81,12 @@ type Client struct {
 func (c *Client) Init() error {
 
 	// Ensure the remote host is reachable
-	_, err := net.Dial("tcp", c.Address)
-	if err != nil {
+	if err := ping(TCP, c.Address); err != nil {
 		return err
 	}
 
 	// Ensure the local host is reachable
-	_, err = net.Dial("tcp", ":"+c.Port)
-	if err != nil {
+	if err := ping(TCP, ":"+c.Port); err != nil {
 		return err
 	}
 
@@ -97,20 +107,43 @@ func (c *Client) changeState(value ClientState) {
 
 func (c *Client) Connect() error {
 
+	var err error
+	var conn net.Conn
+
 	// set client State
 	c.changeState(Connecting)
 
-	conf := &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
-	// Get a TLS connection
-	conn, err := tls.Dial("tcp", c.Address, conf)
+	//	Parse the address URL.
+	c.url, err = url.Parse(c.Address)
 	if err != nil {
 		return err
 	}
 
-	remoteURL := fmt.Sprint(scheme(conn), "://", conn.RemoteAddr(), CONNECTION_PATH)
+	//	Check whether it's a TLS connection.
+	switch c.url.Scheme {
+	case "https", "wss":
+
+		//	TLS configuration
+		conf := &tls.Config{
+			InsecureSkipVerify: c.InsecureSkipVerify,
+		}
+
+		// Get a TLS connection
+		conn, err = tls.Dial(getNetwork(TCP), c.url.Host, conf)
+		if err != nil {
+			return err
+		}
+
+	default:
+
+		// Get a normal TCP connection
+		conn, err = net.Dial(getNetwork(TCP), c.url.Host)
+		if err != nil {
+			return err
+		}
+	}
+
+	remoteURL := fmt.Sprint(c.url.Scheme, "://", conn.RemoteAddr(), CONNECTION_PATH)
 	req, err := http.NewRequest(http.MethodConnect, remoteURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
@@ -129,6 +162,7 @@ func (c *Client) Connect() error {
 	if err != nil {
 		return fmt.Errorf("reading CONNECT response from %s failed: %s", req.URL, err)
 	}
+
 	defer resp.Body.Close()
 
 	// If the response isn't good, inform the client, and cancel this attempt
@@ -197,11 +231,12 @@ func (c *Client) Connect() error {
 	// Save this connection
 
 	connection := connection{
-		dec:  json.NewDecoder(stream),
-		enc:  json.NewEncoder(stream),
-		conn: stream,
-		host: c.Address,
-		port: c.Port,
+		dec:   json.NewDecoder(stream),
+		enc:   json.NewEncoder(stream),
+		conn:  stream,
+		host:  c.url.Host,
+		port:  c.Port,
+		token: c.Token,
 	}
 
 	// c.connection = connection
@@ -246,8 +281,8 @@ func (c *Client) listen(conn *connection) error {
 
 				// Tunnel the request to locally running reverse proxy
 				if err := c.tunnel(remote); err != nil {
-					log.Println(err)
-					log.Println("failed to proxy data through tunnel")
+					c.Logger.Println(err)
+					c.Logger.Println("failed to proxy data through tunnel")
 				}
 			}()
 		}
@@ -258,7 +293,7 @@ func (c *Client) listen(conn *connection) error {
 func (c *Client) tunnel(remoteConnection net.Conn) error {
 
 	// Dial TCP connection with locally running reverse proxy server
-	localConnection, err := net.Dial("tcp", ":"+c.Port)
+	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.Port)
 	if err != nil {
 		return err
 	}

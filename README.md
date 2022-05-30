@@ -7,13 +7,13 @@ Importable Go library that can be embedded inside your code to expose your local
 - HTTP and HTTPS handling
 - Public Key Authentication
 - SSL Certificates on Server
-- Support for Websockets
 
 ### Coming Soon
 
 - Persistent Key-Value Caching on Server
 - Connection Callbacks
 - Authorized Key Whitelists
+- Support for Websockets
 - Registration of Reserved Hosts
 - Rate Limiting Per Connection
 - Load Balancer for the Server

@@ -1,4 +1,4 @@
-package tunnels
+package gotunnel
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ type connection struct {
 	enc *json.Encoder
 	dec *json.Decoder
 
-	// Holds the actuall connection instance.
+	// Holds the actual connection instance.
 	conn net.Conn
 
 	// Public subdomain on which tunnel is listening on.
@@ -47,10 +47,12 @@ func (c *Connections) Add(conn connection) {
 func (c *Connections) get(host string) *connection {
 	c.Lock()
 	var response *connection
-	for index := 0; index <= len(c.list); index++ {
-		if c.list[index].host == host {
-			response = &c.list[index]
-			break
+	if len(c.list) > 0 {
+		for index := 0; index <= len(c.list); index++ {
+			if c.list[index].host == host {
+				response = &c.list[index]
+				break
+			}
 		}
 	}
 	c.Unlock()
@@ -61,10 +63,12 @@ func (c *Connections) exists(token string) bool {
 
 	c.Lock()
 	var response bool
-	for index := 0; index <= len(c.list); index++ {
-		if c.list[index].token == token {
-			response = true
-			break
+	if len(c.list) > 0 {
+		for index := 0; index <= len(c.list); index++ {
+			if c.list[index].token == token {
+				response = true
+				break
+			}
 		}
 	}
 	c.Unlock()
