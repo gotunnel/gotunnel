@@ -1,48 +1,43 @@
-<div align="center">
 <img src="assets/logo.png" alt="gotunnel" width="150"/>
-  <!--
-  <a href="https://docs.nhost.io/cli">Website</a>
-    <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="https://nhost.io/blog">Blog</a>
-  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="docs/">Command Docs</a>
-  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="https://discord.com/invite/9V7Qb2U">Support</a>
-  <br />
-  <br />
-  -->
-</div>
+<br>
+<br>
 
-<div align="center">
+Importable Go library that can be embedded inside your code to expose your locally running service to a public server. It serves as an open-source alternative to ngrok.
 
-Importable Go library to expose your locally running service to public internet.
+Almost every alternative project is either not open-source or exists as a standalone service or CLI that has to be run separately on your server. And can't be directly imported inside your code. This library, however, solves that.
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/gotunnel/gotunnel)](https://goreportcard.com/report/github.com/gotunnel/gotunnel)
-  <a href="https://twitter.com/mrinalwahal" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/twitter/follow/mrinalwahal?style=social" />
-    </a>
+<br>
 
-</div>
-
-# Features
+## Features
 
 - HTTP and HTTPS handling
 - Public Key Authentication
-- SSL Protection
+- SSL Certificates on Server
 - Support for Websockets
 
-## Coming Soon
+### Coming Soon
 
-- SSH Tunnels
+- Persistent Key-Value Caching on Server
 - Connection Callbacks
 - Authorized Key Whitelists
 - Registration of Reserved Hosts
 - Rate Limiting Per Connection
 - Load Balancer for the Server
+- SSH Tunnels
+
+## Use Cases
+
+- Alternative for preview environments
+- Design prototyping and collaboration
+- Hosting a game server from home
+- Developing webhook integrations
+- Managing IoT devices
+- And more!
+
+<br>
 
 # Contents
 
-- [Features](#features)
 - [Installation](#installation)
   * [Library](#library)
   * [Server](#server)
@@ -74,19 +69,20 @@ go get -u github.com/gotunnel/gotunnel
 
 ## Server
 
+We will soon launch a pre-built server package. Stay tuned!
 
 ## CLI
 
-## Usage
+We will soon launch a standalone CLI built over `gotunnel` to implement both client and server operations. Stay tuned!
 
-Just import the library directly into your code.
+# Usage
 
-### Server
+## Server
 
 For an HTTPS Server, supply your SSL certificate and it's equivalent key files.
 
 ```
-log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
+log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
         Address:     ":443",
         Certificate: "./server.crt",
         Key:         "./server.key",
@@ -97,12 +93,12 @@ For an HTTP Server, just don't supply the certificate and key files, and it will
 start an HTTP server.
 
 ```
-log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
+log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
         Address:     ":80",
 }))
 ```
 
-#### Authentication Middleware
+### Authentication Middleware
 
 A function that you can attach to the server for authenticating every tunnel creation request,
 before you begin the process of creating the tunnel.
@@ -118,19 +114,18 @@ func authenticate (r *http.Request) error {
     // perform authentication
 }
 
-log.Fatal(tunnels.StartServer(&tunnels.ServerConfig{
+log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
         Address:     ":80",
         Auth: authenticate,
 }))
 ```
 
+## Client
 
-### Client
-
-Simple client, without listening for state changes for established tunnel.
+Simple client, without listening for state changes for established tunnel. The `token` must be unique for every client-server connection you create. This token is also used as an identifier by the server to filter and proxy requests.
 
 ```
-client := &tunnels.Client{
+client := &gotunnel.Client{
     Address: "sub.example.com:443",
     Token:   "your_secret_token",
 
@@ -143,14 +138,12 @@ if err := client.Connect(); err != nil {
 }
 ```
 
-For more professional debugging, you can attach a read-only go channel which will record real-time status
-of your tunnel. The client will do the magic of updating these state changes automatically under the hoood.
-You just need to supply a channel to receive them.
+For more professional debugging, you can attach a read-only go channel which will record real-time status of your tunnel.
 
 ```
-state := make(chan *tunnels.ClientState)
+state := make(chan *gotunnel.ClientState)
 
-client := &tunnels.Client{
+client := &gotunnel.Client{
     Address: "sub.example.com:443",
     Token:   "your_secret_token",
     Port:    "8080",
@@ -160,11 +153,11 @@ client := &tunnels.Client{
 go func() {
     for {
         change := <-state
-        if *change == tunnels.Connecting {
+        if *change == gotunnel.Connecting {
             log.Println("Connecting")
-        } else if *change == tunnels.Connected {
+        } else if *change == gotunnel.Connected {
             log.Println("Connected")
-        } else if *change == tunnels.Disconnected {
+        } else if *change == gotunnel.Disconnected {
             log.Println("Disconnected")
         }
     }
@@ -174,92 +167,6 @@ if err := client.Connect(); err != nil {
     return err
 }
 ```
-
-# Usage
-
-Just one command:
-
-    nhost
-
-- On first run in an empty directory, since the directory is not initialized for an Nhost app, it will do so, and launch the development environment.
-- From second run onward, it will start app.
-
-You can also execute the aforementioned actions using their specific commands:
-
-1. `nhost init` - to intialize a blank local app in current working directory. Or `nhost init --remote` to clone an existing app from Nhost console.
-2. `nhost dev` - to start your app.
-
-## **Blank Local app**
-
-If you do not have an already existing app on Nhost console, and you wish to create a new app on Nhost console and link it automatically to the local environment, then use:
-
-    nhost link
-
-Note: ability to create new apps on Nhost console directly from your local environment is only available in CLI `v0.5.0` or above.
-
-If you have CLI version less than `v0.5.0`, then you need to have an already existing app on Nhost console.
-
-> To upgrade your CLI to latest version, check [this](#installing) out.
-
-## **Existing Remote App**
-
-If you already have a remote app for which you would like to setup a local development environment for, use the following:
-
-    nhost init --remote
-
-This will present you with a list of apps, across all the workspaces, available on [Nhost console](https://console.nhost.io), and you can select any one of those to set up a local environment for.
-
-## Environment Variables
-
-- Default file for environment variables is `{app_root}/.env.development`.
-- All variables inside `.env.development` are accessible inside both containers, and functions.
-
-For more detailed information on runtime variables, including how to add environment variables only to specific service containers, and the list of dynamically generated **runtime variables**, [check this out](https://github.com/gotunnel/gotunnel/wiki/Environment#variables).
-
-## Debugging
-
-If you wish to trace the output and check verbose logs for any command, use the global flag `--debug` or `-d`
-
-Example:
-
-    nhost dev -d
-
-This will print the debug logs along with the standard information, warnings and errors.
-
-### ProTip
-
-You can parallely run `nhost logs` to check real time logs of any service container of your choice, while your local environment is already running. And you can also save it's output, by using `--log-file` flag.
-
-<br>
-
-# Functions
-
-All functions must be stored inside the `{app_root}/functions` directory.
-
-When you launch the development environment using `nhost` or `nhost dev`, it will automatically also start your functions server, and display the URL on your terminal, in the following format:
-
-    http://localhost:1337/v1/functions/{function_name}
-
-If you want to call your `functions/hello.js` function, you can call the following route:
-
-    http://localhost:1337/v1/functions/hello
-
-## Runtimes
-
-Nhost CLI currently supports functions in following runtimes:
-
-1. NodeJS (Both Javascript and Typescript)
-2. Golang
-
-For more detailed information on Serverless Functions, like hello-world templates, understanding how speed up testing of functions, and some Pro-Tips, check [this out](https://github.com/gotunnel/gotunnel/wiki/Serverless-Functions).
-
-<br>
-
-# Migration
-
-CLI (>= v0.5.0) produces the `nhost/config.yaml` file in your app root in a different format than the legacy CLI, and not to mention reads the same during `nhost dev` command.
-
-Now, if you already have existing Nhost apps initialized in multiple directories, and you upgrade to CLI `v0.5.0` globally, the new CLI may not be able to read the `nhost/config.yaml` files saved in older formats, hence breaking your local development environment.
 
 # Support
 
