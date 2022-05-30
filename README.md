@@ -1,12 +1,6 @@
-<img src="assets/logo.png" alt="gotunnel" width="150"/>
-<br>
-<br>
+# gotunnel
 
 Importable Go library that can be embedded inside your code to expose your locally running service to a public server. It serves as an open-source alternative to ngrok.
-
-Almost every alternative project is either not open-source or exists as a standalone service or CLI that has to be run separately on your server. And can't be directly imported inside your code. This library, however, solves that.
-
-<br>
 
 ## Features
 
@@ -25,59 +19,24 @@ Almost every alternative project is either not open-source or exists as a standa
 - Load Balancer for the Server
 - SSH Tunnels
 
-## Use Cases
-
-- Alternative for preview environments
-- Design prototyping and collaboration
-- Hosting a game server from home
-- Developing webhook integrations
-- Managing IoT devices
-- And more!
-
-<br>
-
-# Contents
-
-- [Installation](#installation)
-  * [Library](#library)
-  * [Server](#server)
-  * [CLI](#cli)
-- [Usage](#usage)
-  * [Client](#client)
-  * [Server](#server)
-    * [Authentication Middleware](#authentication-middleware)
-  * [CLI](#cli)
-  * [Blank Local app](#blank-local-app)
-  * [Existing Remote app](#existing-remote-app)
-  * [Environment Variables](#environment-variables)
-  * [Debugging](#debugging)
-- [Support Us](#support)
-- [Dependencies](#dependencies)
-- [Advanced Usage](https://github.com/gotunnel/gotunnel/wiki)
-
-<br>
 
 # Installation
-
-## Library
-
-Run:
 
 ```
 go get -u github.com/gotunnel/gotunnel
 ```
 
-## Server
-
-We will soon launch a pre-built server package. Stay tuned!
-
-## CLI
-
-We will soon launch a standalone CLI built over `gotunnel` to implement both client and server operations. Stay tuned!
-
 # Usage
 
 ## Server
+
+For a simple HTTP server, just supply the local port you want to expose.
+
+```
+log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
+        Address:     ":80",
+}))
+```
 
 For an HTTPS Server, supply your SSL certificate and it's equivalent key files.
 
@@ -86,15 +45,6 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
         Address:     ":443",
         Certificate: "./server.crt",
         Key:         "./server.key",
-}))
-```
-
-For an HTTP Server, just don't supply the certificate and key files, and it will automatically
-start an HTTP server.
-
-```
-log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
-        Address:     ":80",
 }))
 ```
 
@@ -167,15 +117,3 @@ if err := client.Connect(); err != nil {
     return err
 }
 ```
-
-# Support
-
-- buying sponsorships please!
-- To report bugs, or request new features, please open an issue.
-- For urgent support, DM me on [Twitter](https://twitter.com/MrinalWahal).
-
-# Dependencies
-
-This project is dependent on following services and libraries:
-
-- [Koding Websockets](https://github.com/koding/websocketproxy)
