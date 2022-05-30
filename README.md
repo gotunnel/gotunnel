@@ -77,11 +77,12 @@ Simple client, without listening for state changes for established tunnel. The `
 
 ```
 client := &gotunnel.Client{
-    Address: "sub.example.com:443",
+    Address: "sub.example.com:80",
     Token:   "your_secret_token",
 
     // Local port to route incoming requests to
     Port:    "8080",
+    InsecureSkipVerify: true,
 }
 
 if err := client.Connect(); err != nil {

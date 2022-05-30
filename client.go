@@ -237,6 +237,9 @@ func (c *Client) Connect() error {
 
 	// open a new stream with server
 	var stream net.Conn
+
+	// if we don't receive anything from the server, we'll timeout
+	// this is blocking until server accepts our session
 	openStream := func() error {
 
 		// this is blocking until server accepts our session
@@ -244,7 +247,6 @@ func (c *Client) Connect() error {
 		return err
 	}
 
-	// if we don't receive anything from the server, we'll timeout
 	select {
 	case err := <-async(openStream):
 		log.Println("opening new stream w/ server")
@@ -339,7 +341,7 @@ func (c *Client) listen(conn *connection) error {
 	}
 }
 
-// Tunnel the request to locally running reverse proxy
+//	Tunnel the request to locally running reverse proxy
 func (c *Client) tunnel(remoteConnection net.Conn) error {
 
 	// Dial TCP connection with locally running reverse proxy server
@@ -360,7 +362,7 @@ func (c *Client) tunnel(remoteConnection net.Conn) error {
 	return nil
 }
 
-// Pipe the data between two connections
+//	Copy the data between two connections
 func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
 	io.Copy(dst, src)

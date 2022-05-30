@@ -58,13 +58,14 @@ func TestConnection(t *testing.T) {
 		{
 			name: "hosted",
 			config: ClientConfig{
-				Address:            "http://whatever.tunnel.wah.al:8080",
+				Address:            "http://whatever.tunnel.wah.al:80",
 				Token:              "secret",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
 			},
 			wantErr: false,
+			run:     false,
 		},
 	}
 
@@ -109,17 +110,26 @@ func TestConnection(t *testing.T) {
 				go func() {
 					if err := c.Connect(); (err != nil) != tt.wantErr {
 						t.Errorf("Client failed to connect, error = %v, wantErr %v", err, tt.wantErr)
+						wg.Done()
 					}
 				}()
 
 				wg.Wait()
 
-				/* 			//	Establish a new session by making a GET request.
-				   			_, err := http.Get(remoteAddr)
-				   			if err != nil {
-				   				t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
-				   			}
+				/* 				//	Establish a new session by making a GET request.
+				   				resp, err := http.Get("http://" + remoteAddr)
+				   				if err != nil {
+				   					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
+				   				}
+
+				   				defer resp.Body.Close()
+
+				   				body, _ := ioutil.ReadAll(resp.Body)
+				   				fmt.Println(string(body))
 				*/
+
+				time.Sleep(30 * time.Second)
+
 			})
 		}
 	}
@@ -135,7 +145,7 @@ func fileServer(port, directory string) http.Server {
 	router.Handle("/", http.FileServer(http.Dir(directory)))
 
 	server := http.Server{
-		Addr:    ":" + port,
+		Addr:    "localhost:" + port,
 		Handler: router,
 	}
 

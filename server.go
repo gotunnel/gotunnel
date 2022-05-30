@@ -123,12 +123,10 @@ type Callbacks struct {
 //	And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
 
-	timeout := config.Timeout
-
 	//	If no default timeout is specifid,
 	//	use the default value.
-	if config.Timeout != 0 {
-		timeout = DefaultTimeout
+	if config.Timeout == 0 {
+		config.Timeout = DefaultTimeout
 	}
 
 	server := &Server{
@@ -136,7 +134,7 @@ func StartServer(config *ServerConfig) error {
 		sessions: sessions{
 			mapping: make(map[string]*yamux.Session),
 		},
-		timeout: timeout,
+		timeout: config.Timeout,
 	}
 
 	if config.Logger != nil {
@@ -253,6 +251,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
+	s.log.WithField("hostname", hostname).Println("Connection hijacked")
 	s.log.WithField("hostname", hostname).Println("Starting new yamux server")
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
@@ -277,26 +276,34 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		}
 	}()
 
-	acceptStream := func() error {
-		stream, err = session.Accept()
-		return err
-	}
-
 	// if we don't receive anything from the client, we'll timeout
-	select {
-	case err := <-async(acceptStream):
-		if err != nil {
-			if session.IsClosed() {
-				log.Printf("TCP closed")
-				break
-			}
-			log.Printf("Yamux accept: %s", err)
+	stream, err = session.Accept()
+	if err != nil {
+		if session.IsClosed() {
+			log.Printf("TCP closed")
+		}
+	}
+	log.Printf("Yamux accept: %s", err)
+
+	/*
+		acceptStream := func() error {
+			stream, err = session.Accept()
 			return err
 		}
-	case <-time.After(s.timeout):
-		return errors.New("timeout getting session")
-	}
-
+			select {
+		   	case err := <-async(acceptStream):
+		   		if err != nil {
+		   			if session.IsClosed() {
+		   				log.Printf("TCP closed")
+		   				break
+		   			}
+		   			log.Printf("Yamux accept: %s", err)
+		   			return err
+		   		}
+		   	case <-time.After(s.timeout):
+		   		return errors.New("timeout getting session")
+		   	}
+	*/
 	log.Println("accepted stream from client")
 
 	// Now that you have initiated a session/stream
@@ -366,19 +373,18 @@ func (s *Server) listen(c *connection) {
 		}
 
 		// right now we don't do anything with the messages, but because the
-		// underlying connection needs to establihsed, we know when we have
+		// underlying connection needs to established, we know when we have
 		// disconnection(above), so we can cleanup the connection.
 		s.log.WithField("hostname", c.host).Printf("msg: %s", msg)
 	}
 }
 
-// Responsible for tunnelling all incoming requests,
-// if their hostname, already has a tunnel.
+//	Responsible for tunnelling all incoming requests,
+//	if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Get the host to which the request has been sent
 	host := r.URL.Hostname()
-
 	stream, err := s.dial(host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -415,8 +421,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 
 	// Get the connection associated with that host
 	conn := s.connections.get(host)
-
-	if conn.token == "" {
+	if conn == nil {
 		return nil, errors.New("no tunnel exists for this host")
 	}
 
@@ -444,14 +449,13 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		return nil, err
 	}
 
+	// if we don't receive anything from the client, we'll timeout
+
 	var stream net.Conn
 	acceptStream := func() error {
 		stream, err = session.Accept()
 		return err
 	}
-
-	// if we don't receive anything from the client, we'll timeout
-	s.log.WithField("hostname", host).Println("Waiting to accept the incoming session")
 
 	select {
 	case err := <-async(acceptStream):

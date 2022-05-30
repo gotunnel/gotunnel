@@ -46,17 +46,15 @@ func (c *Connections) Add(conn connection) {
 
 func (c *Connections) get(host string) *connection {
 	c.Lock()
-	var response *connection
 	if len(c.list) > 0 {
 		for index := 0; index <= len(c.list); index++ {
 			if c.list[index].host == host {
-				response = &c.list[index]
-				break
+				return &c.list[index]
 			}
 		}
 	}
 	c.Unlock()
-	return response
+	return nil
 }
 
 func (c *Connections) exists(token string) bool {
