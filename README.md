@@ -54,7 +54,7 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
 
 On server side, you can supply a custom authentication function that will be executed when a new tunnel creation request is received by the server. It takes an HTTP request and returns an error.
 
-For example, you can use it to authenticate the users who are requesting a new tool from your server.
+For example, you can use it to authenticate the users who are requesting a new tunnel from your server.
 
 ```
 func authenticate (r *http.Request) error {
@@ -110,12 +110,12 @@ For more professional debugging, you can attach a read-only go channel which wil
 ```
 state := make(chan *gotunnel.ClientState)
 
-client := &gotunnel.Client{
+client, _ := gotunnel.NewClient(&gotunnel.Client{
     Address: "sub.example.com:443",
     Token:   "your_secret_token",
     Port:    "8080",
     State:   state,
-}
+})
 
 go func() {
     for {
@@ -135,4 +135,52 @@ if err := client.Connect(); err != nil {
 }
 ```
 
+### Client Auto-Reconnect
+
 You can watch the `gotunnel.Disconnected` state change, and use it to re-connect your client to the server.
+
+------------------------------------
+
+**Example: Reconnect With Exponential Backoff**
+
+You can use a simple backoff library in golang like [`github.com/jpillora/backoff`](https://github.com/jpillora/backoff) to attempt reconnection in exponential intervals.
+
+```
+state := make(chan *gotunnel.ClientState)
+
+client, _ := gotunnel.NewClient(&gotunnel.Client{
+    Address: "sub.example.com:443",
+    Token:   "your_secret_token",
+    Port:    "8080",
+    State:   state,
+})
+
+b := &backoff.Backoff{
+    Max:    5 * time.Minute,
+}
+
+var err error
+
+go func() {
+    for {
+        change := <-state
+        if *change == gotunnel.Connecting {
+            log.Println("Connecting")
+        } else if *change == gotunnel.Connected {
+            log.Println("Connected")
+        } else if *change == gotunnel.Disconnected {
+
+            log.Println("Disconnected")
+
+            //  Attempt reconnection
+            time.Sleep(b.Duration())
+
+            err = client.Connect()
+        }
+    }
+}()
+
+if err = client.Connect(); err != nil {
+    return err
+}
+```
