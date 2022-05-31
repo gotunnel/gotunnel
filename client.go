@@ -17,7 +17,6 @@ import (
 	"net/url"
 
 	"github.com/hashicorp/yamux"
-	"github.com/sirupsen/logrus"
 )
 
 // ClientState represents client connection State to tunnel server.
@@ -66,7 +65,7 @@ type (
 		connectionWaitGroup sync.WaitGroup
 
 		//	Custom Logger
-		log *logrus.Logger
+		log *log.Logger
 	}
 
 	//	Client configuration struct
@@ -82,7 +81,7 @@ type (
 		Port string
 
 		//	Custom Logger
-		Logger *logrus.Logger
+		Logger *log.Logger
 
 		//	Skip verifying TLS certificate for the server.
 		//	Value should be the same as what you used in server configuration.
@@ -118,6 +117,7 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		port:       config.Port,
 		identifier: config.Token,
 		config:     config,
+		log:        &log.Logger{},
 	}
 
 	if config.State != nil {
@@ -129,11 +129,10 @@ func NewClient(config *ClientConfig) (*Client, error) {
 		return client, err
 	}
 
-	//	Initialize a default logger
-	if config.Logger != nil {
-		client.log = config.Logger
+	if config.Logger == nil {
+		client.log.SetOutput(ioutil.Discard)
 	} else {
-		client.log = logrus.New()
+		client.log = config.Logger
 	}
 
 	return client, nil
@@ -239,7 +238,7 @@ func (c *Client) Connect() error {
 	// and might perform a handshake.
 
 	// Setup client side of yamux
-	log.Println("Starting new yamux client")
+	c.log.Println("Starting new yamux client")
 	c.session, err = yamux.Client(conn, nil)
 	if err != nil {
 		return err
@@ -259,7 +258,7 @@ func (c *Client) Connect() error {
 
 	select {
 	case err := <-async(openStream):
-		log.Println("opening new stream w/ server")
+		c.log.Println("opening new stream w/ server")
 		if err != nil {
 			return fmt.Errorf("session could not be opened: %s", err)
 		}
@@ -270,7 +269,7 @@ func (c *Client) Connect() error {
 		return errors.New("timeout opening session")
 	}
 
-	log.Println("sending handshake request to server")
+	c.log.Println("sending handshake request to server")
 	//	Now that you have successfuly opened a session,
 	//	send a handshake request to the server.
 	if _, err := stream.Write([]byte(HandshakeRequest)); err != nil {

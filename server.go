@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/hashicorp/yamux"
 	"github.com/patrickmn/go-cache"
-	"github.com/sirupsen/logrus"
 )
 
 // Server is responsible for proxying public connections to the client over a
@@ -41,7 +41,7 @@ type Server struct {
 	timeout time.Duration
 
 	//	Custom Logger
-	log *logrus.Logger
+	log *log.Logger
 
 	//	In-memory cache for storing active tunnels.
 	//	Each tunnel is mapped with a unique hostname.
@@ -103,15 +103,15 @@ type ServerConfig struct {
 	InsecureSkipVerify bool
 
 	//	Custom Logger
-	Logger *logrus.Logger
+	Logger *log.Logger
 
 	//	Callback functions which are called at specific checkpoints.
 	//	Each function returns an error.
 	Callbacks Callbacks
 
 	//	Expiration time.
-	//	This is the max duration for which an individual tunnel will be persisted in the cache,
-	//	if it is not closed beforehand.
+	//	This is the max duration for which an individual tunnel and its associated sessions
+	//	will be persisted in the cache, if they aren't closed beforehand.
 	//
 	//	Recommended: Do not specify an expiration time
 	//	and let the tunnel be closed by clients only.
@@ -151,12 +151,13 @@ func StartServer(config *ServerConfig) error {
 		// purges expired items every 10 minutes
 		tunnels:  cache.New(cache.NoExpiration, config.Expiration),
 		sessions: cache.New(cache.NoExpiration, config.Expiration),
+		log:      &log.Logger{},
 	}
 
-	if config.Logger != nil {
-		server.log = config.Logger
+	if config.Logger == nil {
+		server.log.SetOutput(ioutil.Discard)
 	} else {
-		server.log = logrus.New()
+		server.log = config.Logger
 	}
 
 	if config.Certificate != "" || config.Key != "" {
@@ -172,12 +173,12 @@ func StartServer(config *ServerConfig) error {
 		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: config.InsecureSkipVerify}
 
 		// if the files exist, start the server
-		server.log.Println("Starting HTTPS server")
+		server.log.Printf("Running HTTPS server on %s", server.config.Address)
 		return http.ListenAndServeTLS(server.config.Address, config.Certificate, config.Key, server)
 	}
 
 	//	Start a normal HTTP server
-	server.log.Println("Starting HTTP server")
+	server.log.Printf("Running HTTP server on %s", server.config.Address)
 	return http.ListenAndServe(server.config.Address, server)
 }
 
@@ -223,7 +224,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
 	hostname := r.URL.Hostname()
-	s.log.WithField("hostname", hostname).Println("Initiating Tunnel Creation")
+	s.log.Println("Initiating Tunnel Creation")
 
 	// fetch the auth token the client has sent
 	token := r.Header.Get(TokenHeader)
@@ -267,8 +268,8 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	s.log.WithField("hostname", hostname).Println("Connection hijacked")
-	s.log.WithField("hostname", hostname).Println("Starting new yamux server")
+	s.log.Println("Connection hijacked")
+	s.log.Println("Starting new yamux server")
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		return err
@@ -311,11 +312,11 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return errors.New("timeout getting session")
 	}
 
-	log.Println("accepted stream from client")
+	s.log.Println("accepted stream from client")
 
 	// Now that you have initiated a session/stream
 	// the client will send you a handshake request.
-	s.log.WithField("hostname", hostname).Println("Initiating handshake protocol")
+	s.log.Println("Initiating handshake protocol")
 	buf := make([]byte, len(HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -355,7 +356,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		s.config.Callbacks.OnConnection(w, r)
 	}
 
-	s.log.WithField("hostname", hostname).Printf("Tunnel established successfully for %s", connection.host)
+	s.log.Printf("Tunnel established successfully for %s", connection.host)
 	return nil
 }
 
@@ -372,18 +373,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		s.log.WithField("hostname", host).Println("Closing stream")
+		s.log.Println("Closing stream")
 		stream.Close()
 	}()
 
 	// Send the request over that session/stream
-	s.log.WithField("hostname", host).Println("Session opened by client, writing request to client")
+	s.log.Println("Session opened by client, writing request to client")
 	if err := r.Write(stream); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	s.log.WithField("hostname", host).Println("Waiting for tunnelled response of the request from the client")
+	s.log.Println("Waiting for tunnelled response of the request from the client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
@@ -422,7 +423,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		Type:   HTTP,
 	}
 
-	s.log.WithField("hostname", host).Println("Requesting session from client")
+	s.log.Println("Requesting session from client")
 
 	// ask client to open a session to us, so we can accept it
 	if err := tunnel.send(msg); err != nil {
@@ -464,10 +465,10 @@ func (s *Server) listen(c *connection) {
 			// Delete the connection
 			s.tunnels.Delete(c.host)
 
-			s.log.WithField("hostname", c.host).Println("Deleting connection")
+			s.log.Println("Deleting connection")
 
 			if err != io.EOF {
-				s.log.WithField("hostname", c.host).Printf("decode err: %s", err)
+				s.log.Printf("decode err: %s", err)
 			}
 			return
 		}
@@ -475,7 +476,7 @@ func (s *Server) listen(c *connection) {
 		// right now we don't do anything with the messages, but because the
 		// underlying connection needs to established, we know when we have
 		// disconnection(above), so we can cleanup the connection.
-		//	s.log.WithField("hostname", c.host).Printf("msg: %s", msg)
+		//	s.log.Printf("msg: %s", msg)
 	}
 }
 

@@ -5,7 +5,6 @@ Importable Go library that can be embedded inside your code to expose your local
 ## Features
 
 - HTTP and HTTPS handling
-- Public Key Authentication
 - SSL Certificates on Server
 - Active tunnels and sessions are persisted in-memory cache.
 - Connection Callbacks
@@ -19,6 +18,7 @@ Importable Go library that can be embedded inside your code to expose your local
 - Rate Limiting Per Connection
 - Load Balancer for the Server
 - SSH Tunnels
+- Public Key Authentication
 
 
 # Installation
@@ -91,7 +91,7 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
 Simple client, without listening for state changes for established tunnel. The `token` must be unique for every client-server tunnel you create. This token is also used as an identifier by the server to filter and proxy requests.
 
 ```
-client := &gotunnel.Client{
+client := &gotunnel.ClientConfig{
     Address: "sub.example.com:80",
     Token:   "your_secret_token",
 
@@ -110,7 +110,7 @@ For more professional debugging, you can attach a read-only go channel which wil
 ```
 state := make(chan *gotunnel.ClientState)
 
-client, _ := gotunnel.NewClient(&gotunnel.Client{
+client, _ := gotunnel.NewClient(&gotunnel.ClientConfig{
     Address: "sub.example.com:443",
     Token:   "your_secret_token",
     Port:    "8080",
@@ -164,17 +164,8 @@ var err error
 go func() {
     for {
         change := <-state
-        if *change == gotunnel.Connecting {
-            log.Println("Connecting")
-        } else if *change == gotunnel.Connected {
-            log.Println("Connected")
-        } else if *change == gotunnel.Disconnected {
-
-            log.Println("Disconnected")
-
-            //  Attempt reconnection
+        if *change == gotunnel.Disconnected {
             time.Sleep(b.Duration())
-
             err = client.Connect()
         }
     }

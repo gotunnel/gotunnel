@@ -55,7 +55,7 @@ func TestConnection(t *testing.T) {
 				InsecureSkipVerify: true,
 			},
 			wantErr: false,
-			run:     true,
+			run:     false,
 		},
 		{
 			name: "hosted",
@@ -67,7 +67,7 @@ func TestConnection(t *testing.T) {
 				InsecureSkipVerify: true,
 			},
 			wantErr: false,
-			run:     false,
+			run:     true,
 		},
 	}
 
@@ -111,18 +111,17 @@ func TestConnection(t *testing.T) {
 
 				wg.Wait()
 
-				for i := 0; i <= 2; i++ {
+				for _, route := range []string{"/", "/files"} {
 
 					//	Establish a new session by making a GET request.
-					resp, err := http.Get("http://" + remoteAddr)
+					resp, err := http.Get(c.config.Address + route)
 					if err != nil {
 						t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 					}
 
-					defer resp.Body.Close()
-
 					body, _ := ioutil.ReadAll(resp.Body)
-					fmt.Println(string(body))
+					fmt.Println("on"+route+" - ", string(body))
+					resp.Body.Close()
 				}
 
 				//	Shutdown the client.
@@ -142,14 +141,18 @@ func TestConnection(t *testing.T) {
 func fileServer(port, directory string) http.Server {
 
 	router := http.NewServeMux()
-	router.Handle("/", http.FileServer(http.Dir(directory)))
+	router.Handle("/files", http.FileServer(http.Dir(directory)))
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("it's working!"))
+		w.WriteHeader(200)
+	})
 
 	server := http.Server{
 		Addr:    ":" + port,
 		Handler: router,
 	}
 
-	log.Printf("Serving FS on HTTP port: %s\n", port)
+	log.Printf("Serving on HTTP port: %s\n", port)
 	go server.ListenAndServe()
 
 	return server
