@@ -26,6 +26,9 @@ type connection struct {
 
 	// Records whether the connection is already closed or not.
 	closed bool
+
+	//	BasicAuth credentials to protect incoming visitor sessions.
+	//	credentials Credentials
 }
 
 func (c *connection) Close() error {

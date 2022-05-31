@@ -34,6 +34,11 @@ const (
 )
 
 type (
+	/* 	Credentials struct {
+	   		username string
+	   		password string
+	   	}
+	*/
 	Client struct {
 
 		//	Prased URL of the remote address.
@@ -89,6 +94,11 @@ type (
 		// Will also be used as a unique identifier
 		// by the server for storing tunnel connection.
 		Token string
+
+		//	Basic Auth.
+		//	To password-protect your expose server.
+		//	Every visitor must have the credentials to access the tunnel back to your localhost.
+		//	BasicAuth Credentials
 
 		// Read-only Channel on which connection's
 		// current state is transmitted to.

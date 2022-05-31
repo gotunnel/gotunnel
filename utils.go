@@ -59,15 +59,6 @@ func scheme(conn net.Conn) (scheme string) {
 	return
 }
 
-func isTLS(conn net.Conn) bool {
-	switch conn.(type) {
-	case *tls.Conn:
-		return true
-	default:
-		return false
-	}
-}
-
 // async is a helper function to convert a blocking function to a function
 // returning an error. Useful for plugging function closures into select and co
 func async(fn func() error) <-chan error {

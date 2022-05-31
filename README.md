@@ -8,11 +8,11 @@ Importable Go library that can be embedded inside your code to expose your local
 - Public Key Authentication
 - SSL Certificates on Server
 - Active tunnels and sessions are persisted in-memory cache.
+- Connection Callbacks
+- Auto-Reconnect the Client
 
 ### Coming Soon
 
-- Persistent Key-Value Caching on Server
-- Connection Callbacks
 - Authorized Key Whitelists
 - Support for Websockets
 - Registration of Reserved Hosts
@@ -67,9 +67,24 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
 }))
 ```
 
-### Callbacks
+### Callback Functions
 
-To be added.
+These are specialized functions that if supplied, are triggered on specific client state changes.
+
+For example, the `OnConnection` callback function is triggered once a new tunnel is successfully established.
+
+```
+log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
+	Address:            ":5000",
+	InsecureSkipVerify: true,
+	Callbacks: gotunnel.Callbacks{
+		OnConnection: func(w http.ResponseWriter, r *http.Request) error {
+			w.Write([]byte("Hello World!"))
+			return nil
+		},
+	},
+}))
+```
 
 ## Client
 
@@ -119,3 +134,5 @@ if err := client.Connect(); err != nil {
     return err
 }
 ```
+
+You can watch the `gotunnel.Disconnected` state change, and use it to re-connect your client to the server.
