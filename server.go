@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/patrickmn/go-cache"
 	"github.com/sirupsen/logrus"
 )
 
@@ -40,6 +41,9 @@ type Server struct {
 
 	//	Custom Logger
 	log *logrus.Logger
+
+	//	In-memory cache for storing active tunnels.
+	tunnels *cache.Cache
 }
 
 // Server config specified by the user.
@@ -102,6 +106,14 @@ type ServerConfig struct {
 	//	Callback functions which are called at specific checkpoints.
 	//	Each function returns an error.
 	Callbacks Callbacks
+
+	//	Expiration time.
+	//	This is the max duration for which an individual tunnel will be persisted in the cache,
+	//	if it is not closed beforehand.
+	//
+	//	Recommended: Do not specify an expiration time
+	//	and let the tunnel be closed by clients only.
+	Expiration time.Duration
 }
 
 //	Functions to be called after hitting specific checkpoints.
@@ -135,6 +147,10 @@ func StartServer(config *ServerConfig) error {
 			mapping: make(map[string]*yamux.Session),
 		},
 		timeout: config.Timeout,
+
+		// Create a cache with a default expiration time of 5 minutes, and which
+		// purges expired items every 10 minutes
+		tunnels: cache.New(cache.NoExpiration, config.Expiration),
 	}
 
 	if config.Logger != nil {
@@ -277,33 +293,24 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	}()
 
 	// if we don't receive anything from the client, we'll timeout
-	stream, err = session.Accept()
-	if err != nil {
-		if session.IsClosed() {
-			log.Printf("TCP closed")
-		}
+	acceptStream := func() error {
+		stream, err = session.Accept()
+		return err
 	}
-	log.Printf("Yamux accept: %s", err)
-
-	/*
-		acceptStream := func() error {
-			stream, err = session.Accept()
+	select {
+	case err := <-async(acceptStream):
+		if err != nil {
+			if session.IsClosed() {
+				log.Printf("TCP closed")
+				break
+			}
+			log.Printf("Yamux accept: %s", err)
 			return err
 		}
-			select {
-		   	case err := <-async(acceptStream):
-		   		if err != nil {
-		   			if session.IsClosed() {
-		   				log.Printf("TCP closed")
-		   				break
-		   			}
-		   			log.Printf("Yamux accept: %s", err)
-		   			return err
-		   		}
-		   	case <-time.After(s.timeout):
-		   		return errors.New("timeout getting session")
-		   	}
-	*/
+	case <-time.After(s.timeout):
+		return errors.New("timeout getting session")
+	}
+
 	log.Println("accepted stream from client")
 
 	// Now that you have initiated a session/stream
@@ -349,34 +356,6 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	s.log.WithField("hostname", hostname).Printf("Tunnel established successfully for %s", connection.host)
 	return nil
-}
-
-// Permanently listens for incoming messages on the connection
-func (s *Server) listen(c *connection) {
-	for {
-		var msg map[string]interface{}
-		err := c.dec.Decode(&msg)
-		if err != nil {
-
-			// Close the connection
-			c.Close()
-
-			// Delete the connection
-			s.connections.delete(*c)
-
-			s.log.WithField("hostname", c.host).Println("Deleting connection")
-
-			if err != io.EOF {
-				s.log.WithField("hostname", c.host).Printf("decode err: %s", err)
-			}
-			return
-		}
-
-		// right now we don't do anything with the messages, but because the
-		// underlying connection needs to established, we know when we have
-		// disconnection(above), so we can cleanup the connection.
-		s.log.WithField("hostname", c.host).Printf("msg: %s", msg)
-	}
 }
 
 //	Responsible for tunnelling all incoming requests,
@@ -449,8 +428,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		return nil, err
 	}
 
-	// if we don't receive anything from the client, we'll timeout
-
+	//	If we don't receive anything from the client, we will timeout.
 	var stream net.Conn
 	acceptStream := func() error {
 		stream, err = session.Accept()
@@ -462,5 +440,33 @@ func (s *Server) dial(host string) (net.Conn, error) {
 		return stream, err
 	case <-time.After(s.timeout):
 		return nil, errors.New("timeout getting session")
+	}
+}
+
+// Permanently listens for incoming messages on the connection
+func (s *Server) listen(c *connection) {
+	for {
+		var msg map[string]interface{}
+		err := c.dec.Decode(&msg)
+		if err != nil {
+
+			// Close the connection
+			c.Close()
+
+			// Delete the connection
+			s.connections.delete(*c)
+
+			s.log.WithField("hostname", c.host).Println("Deleting connection")
+
+			if err != io.EOF {
+				s.log.WithField("hostname", c.host).Printf("decode err: %s", err)
+			}
+			return
+		}
+
+		// right now we don't do anything with the messages, but because the
+		// underlying connection needs to established, we know when we have
+		// disconnection(above), so we can cleanup the connection.
+		//	s.log.WithField("hostname", c.host).Printf("msg: %s", msg)
 	}
 }

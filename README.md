@@ -51,14 +51,9 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
 
 ### Authentication Middleware
 
-A function that you can attach to the server for authenticating every tunnel creation request,
-before you begin the process of creating the tunnel.
+On server side, you can supply a custom authentication function that will be executed when a new tunnel creation request is received by the server. It takes an HTTP request and returns an error.
 
-Example: At Nhost, we want to ascertain that the user sending a new tunnel creation request from our CLI client, actually has an Nhost account or not, along with their auth tokens.
-
-You can supply your custom authentication function.
-
-It takes an HTTP request and returns an error. If the error is nil, then authentication is complete, and server will continue with the tunnel creation procedure. If the error is NOT nil, server will return the error, to the client, without proceeding ahead with hijacking.
+For example, you can use it to authenticate the users who are requesting a new tool from your server.
 
 ```
 func authenticate (r *http.Request) error {
@@ -71,9 +66,13 @@ log.Fatal(gotunnel.StartServer(&gotunnel.ServerConfig{
 }))
 ```
 
+### Callbacks
+
+To be added.
+
 ## Client
 
-Simple client, without listening for state changes for established tunnel. The `token` must be unique for every client-server connection you create. This token is also used as an identifier by the server to filter and proxy requests.
+Simple client, without listening for state changes for established tunnel. The `token` must be unique for every client-server tunnel you create. This token is also used as an identifier by the server to filter and proxy requests.
 
 ```
 client := &gotunnel.Client{

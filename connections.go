@@ -25,10 +25,6 @@ type connection struct {
 	host string
 
 	// Port which the connection is locally listening on.
-	// On server side, this will be the randomly assigned port
-	// on which every tunnel is listening for HTTP requests on.
-	// NOT port 80 on which the server is fundamentally listening
-	// for all incoming requests.
 	port string
 
 	// Authentication token sent by client to authorize the tunnel.

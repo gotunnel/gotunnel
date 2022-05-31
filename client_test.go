@@ -2,6 +2,8 @@ package gotunnel
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
@@ -91,13 +93,6 @@ func TestConnection(t *testing.T) {
 
 							log.Println("Tunnel connected")
 
-							//	Ping the remote server to test the connection.
-							if err := ping(TCP, remoteAddr); err != nil {
-								t.Errorf("Ping failed, error = %v, wantErr %v", err, tt.wantErr)
-							}
-
-							log.Println("Ping Completed")
-
 							wg.Done()
 
 						case Disconnected:
@@ -116,21 +111,26 @@ func TestConnection(t *testing.T) {
 
 				wg.Wait()
 
-				/* 				//	Establish a new session by making a GET request.
-				   				resp, err := http.Get("http://" + remoteAddr)
-				   				if err != nil {
-				   					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
-				   				}
+				for i := 0; i <= 2; i++ {
 
-				   				defer resp.Body.Close()
+					//	Establish a new session by making a GET request.
+					resp, err := http.Get("http://" + remoteAddr)
+					if err != nil {
+						t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
+					}
 
-				   				body, _ := ioutil.ReadAll(resp.Body)
-				   				fmt.Println(string(body))
-				*/
+					defer resp.Body.Close()
 
-				time.Sleep(30 * time.Second)
+					body, _ := ioutil.ReadAll(resp.Body)
+					fmt.Println(string(body))
+				}
 
+				//	Shutdown the client.
+				if err := c.Shutdown(); err != nil {
+					t.Errorf("Failed to shutdown client, error = %v, wantErr %v", err, tt.wantErr)
+				}
 			})
+
 		}
 	}
 
@@ -145,7 +145,7 @@ func fileServer(port, directory string) http.Server {
 	router.Handle("/", http.FileServer(http.Dir(directory)))
 
 	server := http.Server{
-		Addr:    "localhost:" + port,
+		Addr:    ":" + port,
 		Handler: router,
 	}
 

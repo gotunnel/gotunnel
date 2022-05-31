@@ -367,3 +367,15 @@ func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
 	io.Copy(dst, src)
 }
+
+//	Gracefully disconnect the client from the server.
+func (c *Client) Shutdown() error {
+
+	if err := c.session.GoAway(); err != nil {
+		return err
+	}
+
+	c.changeState(Disconnected)
+
+	return c.session.Close()
+}
