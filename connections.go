@@ -4,15 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"sync"
 )
 
-// Contains the client-server connections
-type Connections struct {
-	sync.Mutex
-	list []connection
-}
-
+//	Primary structure for a client-server tunnel.
 type connection struct {
 	enc *json.Encoder
 	dec *json.Decoder
@@ -32,57 +26,6 @@ type connection struct {
 
 	// Records whether the connection is already closed or not.
 	closed bool
-}
-
-func (c *Connections) Add(conn connection) {
-	c.Lock()
-	c.list = append(c.list, conn)
-	c.Unlock()
-}
-
-func (c *Connections) get(host string) *connection {
-	c.Lock()
-	if len(c.list) > 0 {
-		for index := 0; index <= len(c.list); index++ {
-			if c.list[index].host == host {
-				return &c.list[index]
-			}
-		}
-	}
-	c.Unlock()
-	return nil
-}
-
-func (c *Connections) exists(token string) bool {
-
-	c.Lock()
-	var response bool
-	if len(c.list) > 0 {
-		for index := 0; index <= len(c.list); index++ {
-			if c.list[index].token == token {
-				response = true
-				break
-			}
-		}
-	}
-	c.Unlock()
-	return response
-}
-
-func (c *Connections) delete(conn connection) {
-
-	c.Lock()
-	var i int
-	for index := 0; index <= len(c.list); index++ {
-		if c.list[index] == conn {
-			i = index
-			break
-		}
-	}
-
-	// remove the connection from the list
-	c.list = append(c.list[:i], c.list[i+1:]...)
-	c.Unlock()
 }
 
 func (c *connection) Close() error {

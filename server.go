@@ -24,11 +24,12 @@ import (
 type Server struct {
 
 	//	Contains all connections established with multiple clients.
-	connections Connections
+	//	connections Connections
 
-	//	sessions contains a session per host.
+	//	In-memory cache for storing active sessions.
 	//	Sessions provides multiplexing over one connection.
-	sessions sessions
+	//	Each session is mapped with a unique identifier.
+	sessions *cache.Cache
 
 	//	connCh is used to publish accepted connections for tcp tunnels.
 	// connCh chan net.Conn
@@ -43,6 +44,7 @@ type Server struct {
 	log *logrus.Logger
 
 	//	In-memory cache for storing active tunnels.
+	//	Each tunnel is mapped with a unique hostname.
 	tunnels *cache.Cache
 }
 
@@ -142,15 +144,13 @@ func StartServer(config *ServerConfig) error {
 	}
 
 	server := &Server{
-		config: config,
-		sessions: sessions{
-			mapping: make(map[string]*yamux.Session),
-		},
+		config:  config,
 		timeout: config.Timeout,
 
 		// Create a cache with a default expiration time of 5 minutes, and which
 		// purges expired items every 10 minutes
-		tunnels: cache.New(cache.NoExpiration, config.Expiration),
+		tunnels:  cache.New(cache.NoExpiration, config.Expiration),
+		sessions: cache.New(cache.NoExpiration, config.Expiration),
 	}
 
 	if config.Logger != nil {
@@ -233,10 +233,13 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	}
 
 	// Check whether a connection associated with this token already exists
-	if conn := s.connections.exists(token); conn {
+	if _, exists := s.tunnels.Get(hostname); exists {
 		return errors.New("tunnel for this hostname already exists")
 	}
-
+	/* 	if conn := s.connections.exists(token); conn {
+	   		return errors.New("tunnel for this hostname already exists")
+	   	}
+	*/
 	// If the server config has an Authentication Middleware,
 	// trigger that function, before proceeding forward
 	if s.config.Auth != nil {
@@ -274,8 +277,9 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 
-	// save the session for future use
-	s.sessions.add(token, session)
+	//	Save the session for future use
+	//	s.sessions.add(token, session)
+	s.sessions.Set(token, session, s.config.Expiration)
 
 	// open a new stream with client
 	var stream net.Conn
@@ -288,7 +292,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 			}
 
 			// delete the session
-			s.sessions.delete(token)
+			s.sessions.Delete(token)
 		}
 	}()
 
@@ -343,7 +347,8 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		host:  r.URL.Hostname(),
 	}
 
-	s.connections.Add(connection)
+	//	s.connections.Add(connection)
+	s.tunnels.Set(r.URL.Hostname(), connection, s.config.Expiration)
 
 	// Start listening for incoming messages
 	// in a separate goroutine.
@@ -398,17 +403,23 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dial(host string) (net.Conn, error) {
 
+	var err error
+
 	// Get the connection associated with that host
-	conn := s.connections.get(host)
-	if conn == nil {
+	payload, exists := s.tunnels.Get(host)
+	if !exists {
 		return nil, errors.New("no tunnel exists for this host")
 	}
 
+	tunnel := payload.(connection)
+
 	// Get the session associated with this token
-	session, err := s.sessions.get(conn.token)
-	if err != nil {
+	fetchedSession, exists := s.sessions.Get(tunnel.token)
+	if !exists {
 		return nil, errors.New("no session exists with this host")
 	}
+
+	session := fetchedSession.(*yamux.Session)
 
 	msg := Protocol{
 		Action: RequestClientSession,
@@ -418,13 +429,14 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	s.log.WithField("hostname", host).Println("Requesting session from client")
 
 	// ask client to open a session to us, so we can accept it
-	if err := conn.send(msg); err != nil {
+	if err := tunnel.send(msg); err != nil {
 		// we might have several issues here, either the stream is closed, or
 		// the session is going be shut down, the underlying connection might
 		// be broken. In all cases, it's not reliable anymore having a client
 		// session.
-		conn.Close()
-		s.connections.delete(*conn)
+		tunnel.conn.Close()
+		//	s.connections.delete(*conn)
+		s.tunnels.Delete(host)
 		return nil, err
 	}
 
@@ -454,7 +466,8 @@ func (s *Server) listen(c *connection) {
 			c.Close()
 
 			// Delete the connection
-			s.connections.delete(*c)
+			//	s.connections.delete(*c)
+			s.tunnels.Delete(c.host)
 
 			s.log.WithField("hostname", c.host).Println("Deleting connection")
 

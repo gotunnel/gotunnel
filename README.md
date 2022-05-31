@@ -7,6 +7,7 @@ Importable Go library that can be embedded inside your code to expose your local
 - HTTP and HTTPS handling
 - Public Key Authentication
 - SSL Certificates on Server
+- Active tunnels and sessions are persisted in-memory cache.
 
 ### Coming Soon
 
