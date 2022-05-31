@@ -13,31 +13,32 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
 	"github.com/patrickmn/go-cache"
 )
 
-// Server is responsible for proxying public connections to the client over a
-// tunnel connection. It also listens to control messages from the client.
+// Server is responsible for proxying public tunnels to the client over a
+// tunnel tunnel. It also listens to control messages from the client.
 type Server struct {
 
-	//	Contains all connections established with multiple clients.
-	//	connections Connections
+	//	Contains all tunnels established with multiple clients.
+	//	tunnels Connections
 
 	//	In-memory cache for storing active sessions.
-	//	Sessions provides multiplexing over one connection.
+	//	Sessions provides multiplexing over one tunnel.
 	//	Each session is mapped with a unique identifier.
 	sessions *cache.Cache
 
-	//	connCh is used to publish accepted connections for tcp tunnels.
+	//	connCh is used to publish accepted tunnels for tcp tunnels.
 	// connCh chan net.Conn
 
 	//	Server Configuration
 	config *ServerConfig
 
-	//	Timeout for connection requests
+	//	Timeout for tunnel requests
 	timeout time.Duration
 
 	//	Custom Logger
@@ -94,15 +95,16 @@ type ServerConfig struct {
 	//	then it is mandatory to supply certificate and key file.
 	Key string
 
-	//	Default timeout for connection requests
+	//	Default timeout for tunnel requests
 	Timeout time.Duration
 
 	//	Skip verifying TLS certificate for the server.
 	//	By default, this will be false.
-	//	Disabling certificate verification makes your connection vulnerable to man-in-the-middle attacks.
+	//	Disabling certificate verification makes your tunnel vulnerable to man-in-the-middle attacks.
 	InsecureSkipVerify bool
 
-	//	Custom Logger
+	//	Custom Logger.
+	//	If not supplied, no logging output will be printed.
 	Logger *log.Logger
 
 	//	Callback functions which are called at specific checkpoints.
@@ -130,7 +132,7 @@ type Callbacks struct {
 	OnConnection func(http.ResponseWriter, *http.Request) error
 
 	//	This function is called immediately after a tunnel as been dissolved.
-	//	OnDisconnection func(http.ResponseWriter, *http.Request) error
+	//	OnDistunnel func(http.ResponseWriter, *http.Request) error
 }
 
 //	Creates a new server, based on the supplied configuration.
@@ -182,8 +184,8 @@ func StartServer(config *ServerConfig) error {
 	return http.ListenAndServe(server.config.Address, server)
 }
 
-// ServeHTTP is a tunnel that creates a tunnel between a
-// public connection and the client connection.
+// ServeHTTP creates a tunnel between a
+// public tunnel and the client tunnel.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// If there is an HTTP Director function,
@@ -200,10 +202,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch filepath.Clean(r.URL.Path) {
-	case CONNECTION_PATH:
+	if filepath.Clean(r.URL.Path) == CONNECTION_PATH {
 
-		// check for CONNECT method
+		// Check for CONNECT method
 		if r.Method != http.MethodConnect {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
@@ -213,9 +214,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := s.tunnelCreationHandler(w, r); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+
+		} else {
+
+			s.handleHTTP(w, r)
 		}
-	default:
-		s.handleHTTP(w, r)
 	}
 }
 
@@ -233,7 +236,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return errors.New("token header not found")
 	}
 
-	// Check whether a connection associated with this token already exists
+	// Check whether a tunnel associated with this token already exists
 	if _, exists := s.tunnels.Get(hostname); exists {
 		return errors.New("tunnel for this hostname already exists")
 	}
@@ -246,8 +249,8 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		}
 	}
 
-	// Hijack the CONNECT request connection.
-	// This will now allow us to control this connection
+	// Hijack the incoming CONNECT request for a new tunnel.
+	// This will now allow us to control this tunnel
 	// on our own terms, instead of allowing the
 	// http.Handler to close it as soon as the request has been completed.
 	hj, ok := w.(http.Hijacker)
@@ -265,7 +268,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	}
 
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return fmt.Errorf("error setting connection deadline: %s", err)
+		return fmt.Errorf("error setting tunnel deadline: %s", err)
 	}
 
 	s.log.Println("Connection hijacked")
@@ -335,8 +338,8 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	// Now that we've completed the handshake,
 	// the tunnel has been established.
 
-	// Save this connection
-	connection := connection{
+	// Save this tunnel
+	tunnel := tunnel{
 		dec:   json.NewDecoder(stream),
 		enc:   json.NewEncoder(stream),
 		conn:  stream,
@@ -344,19 +347,19 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		host:  r.URL.Hostname(),
 	}
 
-	//	s.connections.Add(connection)
-	s.tunnels.Set(r.URL.Hostname(), connection, s.config.Expiration)
+	//	s.tunnels.Add(tunnel)
+	s.tunnels.Set(r.URL.Hostname(), tunnel, s.config.Expiration)
 
 	// Start listening for incoming messages
 	// in a separate goroutine.
-	go s.listen(&connection)
+	go s.listen(&tunnel)
 
 	// Call the OnConnection callback
 	if s.config.Callbacks.OnConnection != nil {
 		s.config.Callbacks.OnConnection(w, r)
 	}
 
-	s.log.Printf("Tunnel established successfully for %s", connection.host)
+	s.log.Printf("Tunnel established successfully for %s", tunnel.host)
 	return nil
 }
 
@@ -364,9 +367,19 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 //	if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
-	// Get the host to which the request has been sent
+	//	Check whether it's a Websocket connection.
+	if r.Method == http.MethodGet &&
+		headerContains(r.Header["Connection"], "upgrade") &&
+		headerContains(r.Header["Upgrade"], "websocket") {
+
+		s.log.Println("handling websocket connection")
+		s.handleWSConnection(w, r)
+		return
+	}
+
 	host := r.URL.Hostname()
-	stream, err := s.dial(host)
+
+	stream, err := s.dial(host, HTTP)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -398,17 +411,83 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func (s *Server) dial(host string) (net.Conn, error) {
+func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
+
+	// Hijack the incoming request for a new session.
+	// This will now allow us to control this tunnel
+	// on our own terms, instead of allowing the
+	// http.Handler to close it as soon as the request has been completed.
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "webserver doesn't support hijacking", http.StatusBadGateway)
+		return
+	}
+
+	//	Get the connection after hijacking.
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		http.Error(w, "hijacking not possible: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	// Get the host from the request.
+	host := r.URL.Hostname()
+
+	//	Start a stream with the client.
+	stream, err := s.dial(host, WS)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	//	Write the websocket upgrade request back to the original request.
+	if err := r.Write(stream); err != nil {
+		http.Error(w, "unable to write upgrade request: "+err.Error(), http.StatusBadGateway)
+		stream.Close()
+		return
+	}
+
+	//	Read the response.
+	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
+	if err != nil {
+		http.Error(w, "unable to read upgrade response: "+err.Error(), http.StatusBadGateway)
+		stream.Close()
+		return
+	}
+
+	//	Write the upgrade response back to the original connection.
+	if err := resp.Write(conn); err != nil {
+		http.Error(w, "unable to write upgrade response: "+err.Error(), http.StatusBadGateway)
+		stream.Close()
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	//	Start proxying the data to and fro, in parallel goroutines.
+	go proxy(conn, stream, &wg)
+	go proxy(stream, conn, &wg)
+
+	wg.Wait()
+
+	//	Close both the stream w/ client, and the original session connection,
+	//	once you are done proxying.
+	stream.Close()
+	conn.Close()
+}
+
+func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
 
 	var err error
 
-	// Get the connection associated with that host
+	// Get the tunnel associated with that host
 	payload, exists := s.tunnels.Get(host)
 	if !exists {
 		return nil, errors.New("no tunnel exists for this host")
 	}
 
-	tunnel := payload.(connection)
+	tunnel := payload.(tunnel)
 
 	// Get the session associated with this token
 	fetchedSession, exists := s.sessions.Get(tunnel.token)
@@ -420,7 +499,7 @@ func (s *Server) dial(host string) (net.Conn, error) {
 
 	msg := Protocol{
 		Action: RequestClientSession,
-		Type:   HTTP,
+		Type:   protocol,
 	}
 
 	s.log.Println("Requesting session from client")
@@ -428,11 +507,11 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	// ask client to open a session to us, so we can accept it
 	if err := tunnel.send(msg); err != nil {
 		// we might have several issues here, either the stream is closed, or
-		// the session is going be shut down, the underlying connection might
+		// the session is going be shut down, the underlying tunnel might
 		// be broken. In all cases, it's not reliable anymore having a client
 		// session.
 		tunnel.conn.Close()
-		s.tunnels.Delete(host)
+		s.tunnels.Delete(tunnel.host)
 
 		return nil, err
 	}
@@ -452,20 +531,18 @@ func (s *Server) dial(host string) (net.Conn, error) {
 	}
 }
 
-// Permanently listens for incoming messages on the connection
-func (s *Server) listen(c *connection) {
+// Permanently listens for incoming messages on the tunnel
+func (s *Server) listen(c *tunnel) {
 	for {
 		var msg map[string]interface{}
 		err := c.dec.Decode(&msg)
 		if err != nil {
 
-			// Close the connection
+			// Close the tunnel
 			c.Close()
 
-			// Delete the connection
+			// Delete the tunnel
 			s.tunnels.Delete(c.host)
-
-			s.log.Println("Deleting connection")
 
 			if err != io.EOF {
 				s.log.Printf("decode err: %s", err)
@@ -474,8 +551,8 @@ func (s *Server) listen(c *connection) {
 		}
 
 		// right now we don't do anything with the messages, but because the
-		// underlying connection needs to established, we know when we have
-		// disconnection(above), so we can cleanup the connection.
+		// underlying tunnel needs to established, we know when we have
+		// distunnel(above), so we can cleanup the tunnel.
 		//	s.log.Printf("msg: %s", msg)
 	}
 }
@@ -522,5 +599,35 @@ func basicAuth(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	})
+}
+*/
+
+/*
+
+func (s *Server) handleTCPConn(conn net.Conn) error {
+	ident, ok := s.virtualAddrs.getIdent(conn)
+	if !ok {
+		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
+	}
+
+	_, port, err := parseHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return err
+	}
+
+	stream, err := s.dial(ident, proto.TCP, port)
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go s.proxy(&wg, conn, stream)
+	go s.proxy(&wg, stream, conn)
+
+	wg.Wait()
+
+	return nonil(stream.Close(), conn.Close())
 }
 */

@@ -1,19 +1,20 @@
 # gotunnel
 
+[![Tests](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml/badge.svg)](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml)
+
 Importable Go library that can be embedded inside your code to expose your locally running service to a public server. It serves as an open-source alternative to ngrok.
 
 ## Features
 
-- HTTP and HTTPS handling
-- SSL Certificates on Server
-- Active tunnels and sessions are persisted in-memory cache.
+- Handles TCP, HTTP and Websocket Connections
+- TLS Support w/ SSL Certificates on Server
+- In-memory cache for storing tunnels and sessions.
 - Connection Callbacks
 - Auto-Reconnect the Client
 
 ### Coming Soon
 
 - Authorized Key Whitelists
-- Support for Websockets
 - Registration of Reserved Hosts
 - Rate Limiting Per Connection
 - Load Balancer for the Server
@@ -105,10 +106,10 @@ if err := client.Connect(); err != nil {
 }
 ```
 
-For more professional debugging, you can attach a read-only go channel which will record real-time status of your tunnel.
+For more professional debugging, you can attach a read-only go channel to receive real-time state change notifications.
 
 ```
-state := make(chan *gotunnel.ClientState)
+state := make(chan *gotunnel.TunnelState)
 
 client, _ := gotunnel.NewClient(&gotunnel.ClientConfig{
     Address: "sub.example.com:443",
@@ -146,7 +147,7 @@ You can watch the `gotunnel.Disconnected` state change, and use it to re-connect
 You can use a simple backoff library in golang like [`github.com/jpillora/backoff`](https://github.com/jpillora/backoff) to attempt reconnection in exponential intervals.
 
 ```
-state := make(chan *gotunnel.ClientState)
+state := make(chan *gotunnel.TunnelState)
 
 client, _ := gotunnel.NewClient(&gotunnel.Client{
     Address: "sub.example.com:443",

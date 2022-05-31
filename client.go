@@ -19,19 +19,6 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// ClientState represents client connection State to tunnel server.
-type ClientState uint32
-
-// ClientState enumeration
-const (
-	Unknown ClientState = iota
-	Started
-	Connecting
-	Connected
-	Disconnected
-	Closed // keep it always last
-)
-
 type (
 	/* 	Credentials struct {
 	   		username string
@@ -46,23 +33,23 @@ type (
 		//	Local port you want to expose to the outside world.
 		port string
 
-		//	Unique identifier for storing the tunnel connection.
+		//	Unique identifier for storing the tunnel tunnel.
 		identifier string
 
 		//	Client configuration structure.
 		config *ClientConfig
 
-		// Read-only Channel on which connection's
+		// Read-only Channel on which tunnel's
 		// current state is transmitted to.
-		state chan<- *ClientState
+		state chan<- *TunnelState
 
-		// Contains the established connection state
-		// connection connection
+		// Contains the established tunnel state
+		// tunnel tunnel
 
 		session *yamux.Session
 
-		requestWaitGroup    sync.WaitGroup
-		connectionWaitGroup sync.WaitGroup
+		requestWaitGroup sync.WaitGroup
+		tunnelWaitGroup  sync.WaitGroup
 
 		//	Custom Logger
 		log *log.Logger
@@ -71,7 +58,7 @@ type (
 	//	Client configuration struct
 	ClientConfig struct {
 
-		// Hostname on which tunnel is listening for public connections.
+		// Hostname on which tunnel is listening for public tunnels.
 		// Example: https://wahal.tunnel.wah.al:443
 		Address string
 
@@ -80,18 +67,19 @@ type (
 		// incoming proxy requests through the tunnel.
 		Port string
 
-		//	Custom Logger
+		//	Custom Logger.
+		//	If not supplied, no logging output will be printed.
 		Logger *log.Logger
 
 		//	Skip verifying TLS certificate for the server.
 		//	Value should be the same as what you used in server configuration.
 		//	By default, this will be false.
-		//	Disabling certificate verification makes your connection vulnerable to man-in-the-middle attacks.
+		//	Disabling certificate verification makes your tunnel vulnerable to man-in-the-middle attacks.
 		InsecureSkipVerify bool
 
 		// Authentication token.
 		// Will also be used as a unique identifier
-		// by the server for storing tunnel connection.
+		// by the server for storing tunnel tunnel.
 		Token string
 
 		//	Basic Auth.
@@ -99,12 +87,12 @@ type (
 		//	Every visitor must have the credentials to access the tunnel back to your localhost.
 		//	BasicAuth Credentials
 
-		// Read-only Channel on which connection's
+		// Read-only Channel on which tunnel's
 		// current state is transmitted to.
 		//
 		// It's advisable to assign this channel,
 		// for better debugging on the vendor's side.
-		State chan<- *ClientState
+		State chan<- *TunnelState
 	}
 )
 
@@ -138,8 +126,8 @@ func NewClient(config *ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-// update client's connection states
-func (c *Client) changeState(value ClientState) {
+// update client's tunnel states
+func (c *Client) changeState(value TunnelState) {
 
 	if c.state != nil {
 		c.state <- &value
@@ -174,7 +162,7 @@ func (c *Client) Connect() error {
 	// set client State
 	c.changeState(Connecting)
 
-	//	Check whether it's a TLS connection.
+	//	Check whether it's a TLS tunnel.
 	switch c.remote.Scheme {
 	case "https", "wss":
 
@@ -183,7 +171,7 @@ func (c *Client) Connect() error {
 			InsecureSkipVerify: c.config.InsecureSkipVerify,
 		}
 
-		// Get a TLS connection
+		// Get a TLS tunnel
 		conn, err = tls.Dial(getNetwork(TCP), c.remote.Host, conf)
 		if err != nil {
 			return err
@@ -191,7 +179,7 @@ func (c *Client) Connect() error {
 
 	default:
 
-		// Get a normal TCP connection
+		// Get a normal TCP tunnel
 		conn, err = net.Dial(getNetwork(TCP), c.remote.Host)
 		if err != nil {
 			return err
@@ -230,8 +218,8 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("tunnel server error: status=%d, body=%s", resp.StatusCode, string(out))
 	}
 
-	// wait until previous listening funcs observes disconnection
-	c.connectionWaitGroup.Wait()
+	// wait until previous listening funcs observes distunnel
+	c.tunnelWaitGroup.Wait()
 
 	// Now that the server has responded well on your request,
 	// the server should have ideally hijacked your request connect
@@ -272,26 +260,15 @@ func (c *Client) Connect() error {
 	c.log.Println("sending handshake request to server")
 	//	Now that you have successfuly opened a session,
 	//	send a handshake request to the server.
-	if _, err := stream.Write([]byte(HandshakeRequest)); err != nil {
-		return fmt.Errorf("writing handshake request failed: %s", err)
-	}
-
-	// Read the server's response to your handshake request
-	buf := make([]byte, len(HandshakeResponse))
-	if _, err := stream.Read(buf); err != nil {
-		return fmt.Errorf("reading handshake response failed: %s", err)
-	}
-
-	// If the server has rejected your handshake, then end this mess right here right now
-	if string(buf) != HandshakeResponse {
-		return fmt.Errorf("invalid handshake response, received: %s", string(buf))
+	if err := handshake(stream); err != nil {
+		return err
 	}
 
 	// Now that we've completed the handshake,
 	// the tunnel has been established.
-	// Save this connection
+	// Save this tunnel
 
-	connection := connection{
+	tunnel := tunnel{
 		dec:   json.NewDecoder(stream),
 		enc:   json.NewEncoder(stream),
 		conn:  stream,
@@ -300,29 +277,50 @@ func (c *Client) Connect() error {
 		token: c.identifier,
 	}
 
-	// c.connection = connection
+	// c.tunnel = tunnel
 
 	// update client State
 	c.changeState(Connected)
 
 	// Start listening for incoming messages
 	// in a separate goroutine
-	return c.listen(&connection)
+	return c.listen(&tunnel)
 }
 
-func (c *Client) listen(conn *connection) error {
-	c.connectionWaitGroup.Add(1)
-	defer c.connectionWaitGroup.Done()
+//	Performs a handshake request with supplied connection.
+func handshake(conn net.Conn) error {
+
+	if _, err := conn.Write([]byte(HandshakeRequest)); err != nil {
+		return fmt.Errorf("writing handshake request failed: %s", err)
+	}
+
+	// Read the server's response to your handshake request
+	buf := make([]byte, len(HandshakeResponse))
+	if _, err := conn.Read(buf); err != nil {
+		return fmt.Errorf("reading handshake response failed: %s", err)
+	}
+
+	// If the server has rejected your handshake, then end this mess right here right now
+	if string(buf) != HandshakeResponse {
+		return fmt.Errorf("invalid handshake response, received: %s", string(buf))
+	}
+
+	return nil
+}
+
+func (c *Client) listen(conn *tunnel) error {
+	c.tunnelWaitGroup.Add(1)
+	defer c.tunnelWaitGroup.Done()
 
 	for {
 		var msg Protocol
 		if err := conn.dec.Decode(&msg); err != nil {
-			c.requestWaitGroup.Wait() // wait until all requests are finished
-			c.session.GoAway()
-			c.session.Close()
 
-			// update client State
-			c.changeState(Disconnected)
+			//	Wait until all requests are finished
+			c.requestWaitGroup.Wait()
+
+			//	Gracefully shutdown
+			c.Shutdown()
 
 			return fmt.Errorf("failed to unmarshal message from server")
 		}
@@ -340,7 +338,7 @@ func (c *Client) listen(conn *connection) error {
 				// Close the stream with server
 				defer remote.Close()
 
-				// Tunnel the request to locally running reverse proxy
+				// Tunnel the request to the local client.
 				if err := c.tunnel(remote); err != nil {
 					c.log.Println(err)
 					c.log.Println("failed to proxy data through tunnel")
@@ -350,10 +348,10 @@ func (c *Client) listen(conn *connection) error {
 	}
 }
 
-//	Tunnel the request to locally running reverse proxy
+//	Tunnel the request to locally running client.
 func (c *Client) tunnel(remoteConnection net.Conn) error {
 
-	// Dial TCP connection with locally running reverse proxy server
+	// Dial TCP connection with the local client.
 	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
 	if err != nil {
 		return err
@@ -371,7 +369,7 @@ func (c *Client) tunnel(remoteConnection net.Conn) error {
 	return nil
 }
 
-//	Copy the data between two connections
+//	Copy the data between two tunnels
 func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
 	io.Copy(dst, src)

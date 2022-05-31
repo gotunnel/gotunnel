@@ -26,7 +26,7 @@ func TestConnection(t *testing.T) {
 	var wg sync.WaitGroup
 
 	//	Initialize a client state channel
-	state := make(chan *ClientState)
+	state := make(chan *TunnelState)
 
 	//	Launch a local file server for testing.
 	fsServer := fileServer(localPort, ".")
@@ -55,7 +55,7 @@ func TestConnection(t *testing.T) {
 				InsecureSkipVerify: true,
 			},
 			wantErr: false,
-			run:     false,
+			run:     true,
 		},
 		{
 			name: "hosted",
@@ -67,7 +67,7 @@ func TestConnection(t *testing.T) {
 				InsecureSkipVerify: true,
 			},
 			wantErr: false,
-			run:     true,
+			run:     false,
 		},
 	}
 
@@ -114,7 +114,7 @@ func TestConnection(t *testing.T) {
 				for _, route := range []string{"/", "/files"} {
 
 					//	Establish a new session by making a GET request.
-					resp, err := http.Get(c.config.Address + route)
+					resp, err := http.Get(tt.config.Address + route)
 					if err != nil {
 						t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 					}

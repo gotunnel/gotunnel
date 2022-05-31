@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -87,4 +88,17 @@ func copyHeader(dst, src http.Header) {
 func pathExists(filePath string) bool {
 	_, err := os.Stat(filePath)
 	return err == nil
+}
+
+// headerContains is a copy of tokenListContainsValue from gorilla/websocket/util.go
+func headerContains(header []string, value string) bool {
+	for _, h := range header {
+		for _, v := range strings.Split(h, ",") {
+			if strings.EqualFold(strings.TrimSpace(v), value) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
