@@ -38,9 +38,6 @@ type Server struct {
 	//	Server Configuration
 	config *ServerConfig
 
-	//	Timeout for tunnel requests
-	timeout time.Duration
-
 	//	Custom Logger
 	log *log.Logger
 
@@ -95,9 +92,6 @@ type ServerConfig struct {
 	//	then it is mandatory to supply certificate and key file.
 	Key string
 
-	//	Default timeout for tunnel requests
-	Timeout time.Duration
-
 	//	Skip verifying TLS certificate for the server.
 	//	By default, this will be false.
 	//	Disabling certificate verification makes your tunnel vulnerable to man-in-the-middle attacks.
@@ -118,6 +112,10 @@ type ServerConfig struct {
 	//	Recommended: Do not specify an expiration time
 	//	and let the tunnel be closed by clients only.
 	Expiration time.Duration
+
+	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
+	// yamux.DefaultConfig() is used.
+	YamuxConfig *yamux.Config
 }
 
 //	Functions to be called after hitting specific checkpoints.
@@ -139,15 +137,8 @@ type Callbacks struct {
 //	And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
 
-	//	If no default timeout is specifid,
-	//	use the default value.
-	if config.Timeout == 0 {
-		config.Timeout = DefaultTimeout
-	}
-
 	server := &Server{
-		config:  config,
-		timeout: config.Timeout,
+		config: config,
 
 		// Create a cache with a default expiration time of 5 minutes, and which
 		// purges expired items every 10 minutes
@@ -253,14 +244,9 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	// This will now allow us to control this tunnel
 	// on our own terms, instead of allowing the
 	// http.Handler to close it as soon as the request has been completed.
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		return fmt.Errorf("webserver doesn't support hijacking: %T", w)
-	}
-
-	conn, _, err := hj.Hijack()
+	conn, err := hijack(w)
 	if err != nil {
-		return fmt.Errorf("hijack not possible: %s", err)
+		return err
 	}
 
 	if _, err := io.WriteString(conn, "HTTP/1.1 "+TunnelConnected+"\n\n"); err != nil {
@@ -271,9 +257,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("error setting tunnel deadline: %s", err)
 	}
 
-	s.log.Println("Connection hijacked")
-	s.log.Println("Starting new yamux server")
-	session, err := yamux.Server(conn, nil)
+	session, err := yamux.Server(conn, s.config.YamuxConfig)
 	if err != nil {
 		return err
 	}
@@ -281,10 +265,14 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	//	Save the session for future use
 	s.sessions.Set(token, session, s.config.Expiration)
 
-	// open a new stream with client
-	var stream net.Conn
+	//	Accept a new stream from the client.
+	stream, err := acceptStream(session)
+	if err != nil {
+		s.log.Println("failed to accept stream w/ client")
+		return err
+	}
 
-	// close and delete the session/stream if something goes wrong
+	// 	Close the stream and delete the session if something goes wrong.
 	defer func() {
 		if err != nil {
 			if stream != nil {
@@ -296,42 +284,10 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		}
 	}()
 
-	// if we don't receive anything from the client, we'll timeout
-	acceptStream := func() error {
-		stream, err = session.Accept()
-		return err
-	}
-	select {
-	case err := <-async(acceptStream):
-		if err != nil {
-			if session.IsClosed() {
-				log.Printf("TCP closed")
-				break
-			}
-			log.Printf("Yamux accept: %s", err)
-			return err
-		}
-	case <-time.After(s.timeout):
-		return errors.New("timeout getting session")
-	}
-
-	s.log.Println("accepted stream from client")
-
 	// Now that you have initiated a session/stream
 	// the client will send you a handshake request.
-	s.log.Println("Initiating handshake protocol")
-	buf := make([]byte, len(HandshakeRequest))
-	if _, err := stream.Read(buf); err != nil {
-		return err
-	}
-
-	// Read the client's handshake request
-	if string(buf) != HandshakeRequest {
-		return fmt.Errorf("handshake aborted. got: %s", string(buf))
-	}
-
-	// Write your response to the client's handshake request
-	if _, err := stream.Write([]byte(HandshakeResponse)); err != nil {
+	if err := acceptHandshake(stream); err != nil {
+		s.log.Println("failed to accept handshake from client")
 		return err
 	}
 
@@ -347,7 +303,6 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		host:  r.URL.Hostname(),
 	}
 
-	//	s.tunnels.Add(tunnel)
 	s.tunnels.Set(r.URL.Hostname(), tunnel, s.config.Expiration)
 
 	// Start listening for incoming messages
@@ -361,6 +316,25 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	s.log.Printf("Tunnel established successfully for %s", tunnel.host)
 	return nil
+}
+
+//	Accepts a handshake request from supplied connection.
+func acceptHandshake(conn net.Conn) error {
+
+	buf := make([]byte, len(HandshakeRequest))
+	if _, err := conn.Read(buf); err != nil {
+		return err
+	}
+
+	// Read the handshake request
+	if string(buf) != HandshakeRequest {
+		return fmt.Errorf("handshake aborted. got: %s", string(buf))
+	}
+
+	// Write your response to the handshake request
+	_, err := conn.Write([]byte(HandshakeResponse))
+
+	return err
 }
 
 //	Responsible for tunnelling all incoming requests,
@@ -385,19 +359,15 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer func() {
-		s.log.Println("Closing stream")
-		stream.Close()
-	}()
+	//	Close the stream once the request is handled.
+	defer stream.Close()
 
 	// Send the request over that session/stream
-	s.log.Println("Session opened by client, writing request to client")
 	if err := r.Write(stream); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	s.log.Println("Waiting for tunnelled response of the request from the client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
@@ -417,16 +387,9 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
 	// This will now allow us to control this tunnel
 	// on our own terms, instead of allowing the
 	// http.Handler to close it as soon as the request has been completed.
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "webserver doesn't support hijacking", http.StatusBadGateway)
-		return
-	}
-
-	//	Get the connection after hijacking.
-	conn, _, err := hj.Hijack()
+	conn, err := hijack(w)
 	if err != nil {
-		http.Error(w, "hijacking not possible: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
@@ -462,14 +425,8 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
 	//	Start proxying the data to and fro, in parallel goroutines.
-	go proxy(conn, stream, &wg)
-	go proxy(stream, conn, &wg)
-
-	wg.Wait()
+	copy(conn, stream, sync.WaitGroup{})
 
 	//	Close both the stream w/ client, and the original session connection,
 	//	once you are done proxying.
@@ -478,8 +435,6 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
-
-	var err error
 
 	// Get the tunnel associated with that host
 	payload, exists := s.tunnels.Get(host)
@@ -502,8 +457,6 @@ func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
 		Type:   protocol,
 	}
 
-	s.log.Println("Requesting session from client")
-
 	// ask client to open a session to us, so we can accept it
 	if err := tunnel.send(msg); err != nil {
 		// we might have several issues here, either the stream is closed, or
@@ -513,22 +466,12 @@ func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
 		tunnel.conn.Close()
 		s.tunnels.Delete(tunnel.host)
 
+		s.log.Println("client did not open a session")
 		return nil, err
 	}
 
-	//	If we don't receive anything from the client, we will timeout.
-	var stream net.Conn
-	acceptStream := func() error {
-		stream, err = session.Accept()
-		return err
-	}
-
-	select {
-	case err := <-async(acceptStream):
-		return stream, err
-	case <-time.After(s.timeout):
-		return nil, errors.New("timeout getting session")
-	}
+	//	Accept the incoming stream from client.
+	return acceptStream(session)
 }
 
 // Permanently listens for incoming messages on the tunnel
@@ -555,6 +498,18 @@ func (s *Server) listen(c *tunnel) {
 		// distunnel(above), so we can cleanup the tunnel.
 		//	s.log.Printf("msg: %s", msg)
 	}
+}
+
+//	Hijack let's the caller take control of the connection.
+func hijack(w http.ResponseWriter) (net.Conn, error) {
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, errors.New("webserver doesn't support hijacking")
+	}
+
+	conn, _, err := hj.Hijack()
+	return conn, err
 }
 
 /*

@@ -2,9 +2,6 @@ package gotunnel
 
 import "time"
 
-// Type represents tunneled connection type.
-type Action int
-
 const (
 	CONNECTION_PATH = "/_connectPath"
 
@@ -18,8 +15,6 @@ const (
 	HandshakeRequest = "gotunnelHandshakeRequest"
 	// HandshakeResponse is response to HandshakeRequest sent by server to client.
 	HandshakeResponse = "gotunnelHandshakeOk"
-
-	RequestClientSession Action = iota + 1
 
 	//	Default timeout value used in connection requests.
 	DefaultTimeout = 10 * time.Second

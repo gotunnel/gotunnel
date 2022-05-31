@@ -3,6 +3,9 @@ package gotunnel
 // Type represents tunneled connection type.
 type Type int
 
+// Type represents type of control message.
+type Action int
+
 const (
 	HTTP Type = iota + 1
 	TCP
@@ -12,6 +15,8 @@ const (
 	Requested Type = iota
 	Accepted
 	Established
+
+	RequestClientSession Action = iota + 1
 )
 
 // Custom gotunnel protocol

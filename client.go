@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"net/url"
 
@@ -93,6 +91,10 @@ type (
 		// It's advisable to assign this channel,
 		// for better debugging on the vendor's side.
 		State chan<- *TunnelState
+
+		// YamuxConfig defines the config which passed to every new yamux.Session. If nil
+		// yamux.DefaultConfig() is used.
+		YamuxConfig *yamux.Config
 	}
 )
 
@@ -225,49 +227,28 @@ func (c *Client) Connect() error {
 	// the server should have ideally hijacked your request connect
 	// and might perform a handshake.
 
-	// Setup client side of yamux
-	c.log.Println("Starting new yamux client")
-	c.session, err = yamux.Client(conn, nil)
+	//	Setup client side of yamux
+	c.session, err = yamux.Client(conn, c.config.YamuxConfig)
 	if err != nil {
 		return err
 	}
 
-	// open a new stream with server
-	var stream net.Conn
-
-	// if we don't receive anything from the server, we'll timeout
-	// this is blocking until server accepts our session
-	openStream := func() error {
-
-		// this is blocking until server accepts our session
-		stream, err = c.session.Open()
+	//	Open a new stream w/ the server over our new yamux session.
+	stream, err := openStream(c.session)
+	if err != nil {
+		c.log.Println("failed to open stream w/ server")
 		return err
 	}
 
-	select {
-	case err := <-async(openStream):
-		c.log.Println("opening new stream w/ server")
-		if err != nil {
-			return fmt.Errorf("session could not be opened: %s", err)
-		}
-	case <-time.After(DefaultTimeout):
-		if stream != nil {
-			stream.Close()
-		}
-		return errors.New("timeout opening session")
-	}
-
-	c.log.Println("sending handshake request to server")
 	//	Now that you have successfuly opened a session,
 	//	send a handshake request to the server.
-	if err := handshake(stream); err != nil {
+	if err := sendHandshake(stream); err != nil {
+		c.log.Println("failed to send handshake request to server")
 		return err
 	}
 
 	// Now that we've completed the handshake,
 	// the tunnel has been established.
-	// Save this tunnel
-
 	tunnel := tunnel{
 		dec:   json.NewDecoder(stream),
 		enc:   json.NewEncoder(stream),
@@ -277,18 +258,15 @@ func (c *Client) Connect() error {
 		token: c.identifier,
 	}
 
-	// c.tunnel = tunnel
-
 	// update client State
 	c.changeState(Connected)
 
-	// Start listening for incoming messages
-	// in a separate goroutine
+	// Start listening for incoming messages.
 	return c.listen(&tunnel)
 }
 
-//	Performs a handshake request with supplied connection.
-func handshake(conn net.Conn) error {
+//	Sends a handshake request to supplied connection.
+func sendHandshake(conn net.Conn) error {
 
 	if _, err := conn.Write([]byte(HandshakeRequest)); err != nil {
 		return fmt.Errorf("writing handshake request failed: %s", err)
@@ -328,7 +306,8 @@ func (c *Client) listen(conn *tunnel) error {
 		switch msg.Action {
 		case RequestClientSession:
 
-			remote, err := c.session.Open()
+			//	Open a new stream with the server.
+			remote, err := openStream(c.session)
 			if err != nil {
 				return err
 			}
@@ -338,38 +317,35 @@ func (c *Client) listen(conn *tunnel) error {
 				// Close the stream with server
 				defer remote.Close()
 
-				// Tunnel the request to the local client.
-				if err := c.tunnel(remote); err != nil {
+				// Dial TCP connection to the server.
+				localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
+				if err != nil {
 					c.log.Println(err)
-					c.log.Println("failed to proxy data through tunnel")
+					c.log.Println("failed to connect w/ server")
 				}
+				defer localConnection.Close()
+
+				// Copy the request over the tunnel.
+				copy(localConnection, remote, c.requestWaitGroup)
 			}()
 		}
 	}
 }
 
-//	Tunnel the request to locally running client.
-func (c *Client) tunnel(remoteConnection net.Conn) error {
+//	Tunnel the data between connections.
+func copy(src, dst net.Conn, wg sync.WaitGroup) {
 
-	// Dial TCP connection with the local client.
-	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
-	if err != nil {
-		return err
-	}
-	defer localConnection.Close()
+	wg.Add(2)
 
 	// proxy the request
-	c.requestWaitGroup.Add(2)
-	go proxy(localConnection, remoteConnection, &c.requestWaitGroup)
-	go proxy(remoteConnection, localConnection, &c.requestWaitGroup)
+	go proxy(src, dst, &wg)
+	go proxy(dst, src, &wg)
 
 	// wait for data transfer to finish before closing the stream
-	c.requestWaitGroup.Wait()
-
-	return nil
+	wg.Wait()
 }
 
-//	Copy the data between two tunnels
+//	Copy the data between two connections.
 func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
 	io.Copy(dst, src)

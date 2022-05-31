@@ -61,7 +61,7 @@ func TestConnection(t *testing.T) {
 			name: "hosted",
 			config: ClientConfig{
 				Address:            "http://whatever.tunnel.wah.al:80",
-				Token:              "secret",
+				Token:              "secret-new",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
@@ -90,11 +90,8 @@ func TestConnection(t *testing.T) {
 						case Connecting:
 							log.Println("Establishing tunnel")
 						case Connected:
-
 							log.Println("Tunnel connected")
-
 							wg.Done()
-
 						case Disconnected:
 							log.Println("Tunnel disconnected")
 						}
@@ -111,18 +108,23 @@ func TestConnection(t *testing.T) {
 
 				wg.Wait()
 
-				for _, route := range []string{"/", "/files"} {
-
-					//	Establish a new session by making a GET request.
-					resp, err := http.Get(tt.config.Address + route)
-					if err != nil {
-						t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
-					}
-
-					body, _ := ioutil.ReadAll(resp.Body)
-					fmt.Println("on"+route+" - ", string(body))
-					resp.Body.Close()
+				//	Establish a new session by making a GET request.
+				resp, err := http.Get(tt.config.Address)
+				if err != nil {
+					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 				}
+
+				defer resp.Body.Close()
+
+				body, _ := ioutil.ReadAll(resp.Body)
+				fmt.Println(string(body))
+				resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
+				}
+
+				//	time.Sleep(25 * time.Second)
 
 				//	Shutdown the client.
 				if err := c.Shutdown(); err != nil {
@@ -141,10 +143,10 @@ func TestConnection(t *testing.T) {
 func fileServer(port, directory string) http.Server {
 
 	router := http.NewServeMux()
-	router.Handle("/files", http.FileServer(http.Dir(directory)))
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("it's working!"))
-		w.WriteHeader(200)
+	router.Handle("/", http.FileServer(http.Dir(directory)))
+	router.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello World"))
+		w.WriteHeader(http.StatusOK)
 	})
 
 	server := http.Server{
