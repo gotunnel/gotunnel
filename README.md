@@ -1,8 +1,9 @@
 # gotunnel
 
-[![Tests](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml/badge.svg)](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml)
+[![Tests](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml/badge.svg)](https://github.com/gotunnel/gotunnel/actions/workflows/go.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/gotunnel/gotunnel)](https://goreportcard.com/report/github.com/gotunnel/gotunnel)
 
-Importable Go library that can be embedded inside your code to expose your locally running service to a public server. It serves as an open-source alternative to ngrok.
+
+Importable Go library that can be embedded inside your code to expose your locally running service to a public server. It serves as an open-source alternative to ngrok. And implements both server and client side.
 
 ## Features
 
@@ -20,7 +21,6 @@ Importable Go library that can be embedded inside your code to expose your local
 - Load Balancer for the Server
 - SSH Tunnels
 - Public Key Authentication
-
 
 # Installation
 
@@ -93,7 +93,7 @@ Simple client, without listening for state changes for established tunnel. The `
 
 ```
 client := &gotunnel.ClientConfig{
-    Address: "sub.example.com:80",
+    Address: "http://sub.example.com:80",
     Token:   "your_secret_token",
 
     // Local port to route incoming requests to
@@ -112,7 +112,7 @@ For more professional debugging, you can attach a read-only go channel to receiv
 state := make(chan *gotunnel.TunnelState)
 
 client, _ := gotunnel.NewClient(&gotunnel.ClientConfig{
-    Address: "sub.example.com:443",
+    Address: "https://sub.example.com:443",
     Token:   "your_secret_token",
     Port:    "8080",
     State:   state,
@@ -150,7 +150,7 @@ You can use a simple backoff library in golang like [`github.com/jpillora/backof
 state := make(chan *gotunnel.TunnelState)
 
 client, _ := gotunnel.NewClient(&gotunnel.Client{
-    Address: "sub.example.com:443",
+    Address: "https://sub.example.com:443",
     Token:   "your_secret_token",
     Port:    "8080",
     State:   state,

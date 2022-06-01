@@ -2,8 +2,6 @@ package gotunnel
 
 import (
 	"context"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
@@ -14,7 +12,7 @@ import (
 const (
 
 	//	Remote server address
-	remoteAddr = "0.0.0.0:3000"
+	remoteAddr = "0.0.0.0:9000"
 
 	//	Local port
 	localPort = "8080"
@@ -108,23 +106,17 @@ func TestConnection(t *testing.T) {
 
 				wg.Wait()
 
-				//	Establish a new session by making a GET request.
+				/* //	Establish a new session by making a GET request.
 				resp, err := http.Get(tt.config.Address)
 				if err != nil {
 					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 				}
 
-				defer resp.Body.Close()
-
-				body, _ := ioutil.ReadAll(resp.Body)
-				fmt.Println(string(body))
-				resp.Body.Close()
-
 				if resp.StatusCode != http.StatusOK {
 					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
-				}
+				} */
 
-				//	time.Sleep(25 * time.Second)
+				time.Sleep(25 * time.Second)
 
 				//	Shutdown the client.
 				if err := c.Shutdown(); err != nil {
@@ -144,10 +136,9 @@ func fileServer(port, directory string) http.Server {
 
 	router := http.NewServeMux()
 	router.Handle("/", http.FileServer(http.Dir(directory)))
-	router.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+	/* router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello World"))
-		w.WriteHeader(http.StatusOK)
-	})
+	}) */
 
 	server := http.Server{
 		Addr:    ":" + port,

@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -240,7 +239,7 @@ func (c *Client) Connect() error {
 		return err
 	}
 
-	//	Now that you have successfuly opened a session,
+	//	Now that you have successfuly opened a stream,
 	//	send a handshake request to the server.
 	if err := sendHandshake(stream); err != nil {
 		c.log.Println("failed to send handshake request to server")
@@ -265,7 +264,8 @@ func (c *Client) Connect() error {
 	return c.listen(&tunnel)
 }
 
-//	Sends a handshake request to supplied connection.
+//	Sends a handshake request to supplied connection
+//	and wait to receive a response.
 func sendHandshake(conn net.Conn) error {
 
 	if _, err := conn.Write([]byte(HandshakeRequest)); err != nil {
@@ -294,20 +294,17 @@ func (c *Client) listen(conn *tunnel) error {
 		var msg Protocol
 		if err := conn.dec.Decode(&msg); err != nil {
 
-			//	Wait until all requests are finished
-			c.requestWaitGroup.Wait()
+			c.log.Println("failed to unmarshal message from server")
 
 			//	Gracefully shutdown
-			c.Shutdown()
-
-			return fmt.Errorf("failed to unmarshal message from server")
+			return c.Shutdown()
 		}
 
 		switch msg.Action {
 		case RequestClientSession:
 
 			//	Open a new stream with the server.
-			remote, err := openStream(c.session)
+			remote, err := c.session.Open()
 			if err != nil {
 				return err
 			}
@@ -317,42 +314,61 @@ func (c *Client) listen(conn *tunnel) error {
 				// Close the stream with server
 				defer remote.Close()
 
-				// Dial TCP connection to the server.
-				localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
-				if err != nil {
-					c.log.Println(err)
-					c.log.Println("failed to connect w/ server")
-				}
-				defer localConnection.Close()
+				/* 				// Dial TCP connection to the service running locally on specified port.
+								//	For example, a separate file server.
+								localService, err := net.Dial(getNetwork(TCP), ":"+c.port)
+								if err != nil {
+									c.log.Println(err)
+									c.log.Println("failed to connect w/ server")
+								}
+								defer localService.Close()
 
-				// Copy the request over the tunnel.
-				copy(localConnection, remote, c.requestWaitGroup)
+								// Copy the request over the tunnel.
+								copy(localService, remote, &c.requestWaitGroup)
+							}()
+						}
+					}
+				}
+				*/
+
+				// Tunnel the request to the local client.
+				if err := c.tunnel(remote); err != nil {
+					c.log.Println(err)
+					c.log.Println("failed to proxy data through tunnel")
+				}
+
+				fmt.Println("tunnel closed")
 			}()
 		}
 	}
 }
 
-//	Tunnel the data between connections.
-func copy(src, dst net.Conn, wg sync.WaitGroup) {
+//	Tunnel the request to locally running client.
+func (c *Client) tunnel(remoteConnection net.Conn) error {
 
-	wg.Add(2)
+	// Dial TCP connection with the local client.
+	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
+	if err != nil {
+		return err
+	}
+	defer localConnection.Close()
 
 	// proxy the request
-	go proxy(src, dst, &wg)
-	go proxy(dst, src, &wg)
+	c.requestWaitGroup.Add(2)
+	go proxy(localConnection, remoteConnection, &c.requestWaitGroup)
+	go proxy(remoteConnection, localConnection, &c.requestWaitGroup)
 
 	// wait for data transfer to finish before closing the stream
-	wg.Wait()
-}
+	c.requestWaitGroup.Wait()
 
-//	Copy the data between two connections.
-func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
-	defer wg.Done()
-	io.Copy(dst, src)
+	return nil
 }
 
 //	Gracefully disconnect the client from the server.
 func (c *Client) Shutdown() error {
+
+	//	Wait until all requests are finished
+	c.requestWaitGroup.Wait()
 
 	if err := c.session.GoAway(); err != nil {
 		return err

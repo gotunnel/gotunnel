@@ -341,15 +341,16 @@ func acceptHandshake(conn net.Conn) error {
 //	if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
-	//	Check whether it's a Websocket connection.
-	if r.Method == http.MethodGet &&
-		headerContains(r.Header["Connection"], "upgrade") &&
-		headerContains(r.Header["Upgrade"], "websocket") {
+	/* 	//	Check whether it's a Websocket connection.
+	   	if r.Method == http.MethodGet &&
+	   		headerContains(r.Header["Connection"], "upgrade") &&
+	   		headerContains(r.Header["Upgrade"], "websocket") {
 
-		s.log.Println("handling websocket connection")
-		s.handleWSConnection(w, r)
-		return
-	}
+	   		s.log.Println("handling websocket connection")
+	   		s.handleWSConnection(w, r)
+	   		return
+	   	}
+	*/
 
 	host := r.URL.Hostname()
 
@@ -379,6 +380,84 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
+
+	// Get the tunnel associated with that host
+	payload, exists := s.tunnels.Get(host)
+	if !exists {
+		return nil, errors.New("no tunnel exists for this host")
+	}
+
+	tunnel := payload.(tunnel)
+
+	// Get the session associated with this token
+	fetchedSession, exists := s.sessions.Get(tunnel.token)
+	if !exists {
+		return nil, errors.New("no session exists with this host")
+	}
+
+	session := fetchedSession.(*yamux.Session)
+
+	msg := Protocol{
+		Action: RequestClientSession,
+		Type:   protocol,
+	}
+
+	// ask client to open a session to us, so we can accept it
+	if err := tunnel.send(msg); err != nil {
+		// we might have several issues here, either the stream is closed, or
+		// the session is going be shut down, the underlying tunnel might
+		// be broken. In all cases, it's not reliable anymore having a client
+		// session.
+		tunnel.conn.Close()
+		s.tunnels.Delete(host)
+
+		s.log.Println("client did not open a session")
+		return nil, err
+	}
+
+	//	Accept the incoming stream from client.
+	return acceptStream(session)
+}
+
+// Permanently listens for incoming messages on the tunnel
+func (s *Server) listen(c *tunnel) {
+	for {
+		var msg map[string]interface{}
+		err := c.dec.Decode(&msg)
+		if err != nil {
+
+			// Close the tunnel
+			c.Close()
+
+			// Delete the tunnel
+			s.tunnels.Delete(c.host)
+
+			if err != io.EOF {
+				s.log.Printf("decode err: %s", err)
+			}
+			return
+		}
+
+		// right now we don't do anything with the messages, but because the
+		// underlying tunnel needs to established, we know when we have
+		// distunnel(above), so we can cleanup the tunnel.
+		//	s.log.Printf("msg: %s", msg)
+	}
+}
+
+//	Hijack let's the caller take control of the connection.
+func hijack(w http.ResponseWriter) (net.Conn, error) {
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, errors.New("webserver doesn't support hijacking")
+	}
+
+	conn, _, err := hj.Hijack()
+	return conn, err
 }
 
 func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
@@ -426,90 +505,12 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//	Start proxying the data to and fro, in parallel goroutines.
-	copy(conn, stream, sync.WaitGroup{})
+	copy(conn, stream, &sync.WaitGroup{})
 
 	//	Close both the stream w/ client, and the original session connection,
 	//	once you are done proxying.
 	stream.Close()
 	conn.Close()
-}
-
-func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
-
-	// Get the tunnel associated with that host
-	payload, exists := s.tunnels.Get(host)
-	if !exists {
-		return nil, errors.New("no tunnel exists for this host")
-	}
-
-	tunnel := payload.(tunnel)
-
-	// Get the session associated with this token
-	fetchedSession, exists := s.sessions.Get(tunnel.token)
-	if !exists {
-		return nil, errors.New("no session exists with this host")
-	}
-
-	session := fetchedSession.(*yamux.Session)
-
-	msg := Protocol{
-		Action: RequestClientSession,
-		Type:   protocol,
-	}
-
-	// ask client to open a session to us, so we can accept it
-	if err := tunnel.send(msg); err != nil {
-		// we might have several issues here, either the stream is closed, or
-		// the session is going be shut down, the underlying tunnel might
-		// be broken. In all cases, it's not reliable anymore having a client
-		// session.
-		tunnel.conn.Close()
-		s.tunnels.Delete(tunnel.host)
-
-		s.log.Println("client did not open a session")
-		return nil, err
-	}
-
-	//	Accept the incoming stream from client.
-	return acceptStream(session)
-}
-
-// Permanently listens for incoming messages on the tunnel
-func (s *Server) listen(c *tunnel) {
-	for {
-		var msg map[string]interface{}
-		err := c.dec.Decode(&msg)
-		if err != nil {
-
-			// Close the tunnel
-			c.Close()
-
-			// Delete the tunnel
-			s.tunnels.Delete(c.host)
-
-			if err != io.EOF {
-				s.log.Printf("decode err: %s", err)
-			}
-			return
-		}
-
-		// right now we don't do anything with the messages, but because the
-		// underlying tunnel needs to established, we know when we have
-		// distunnel(above), so we can cleanup the tunnel.
-		//	s.log.Printf("msg: %s", msg)
-	}
-}
-
-//	Hijack let's the caller take control of the connection.
-func hijack(w http.ResponseWriter) (net.Conn, error) {
-
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		return nil, errors.New("webserver doesn't support hijacking")
-	}
-
-	conn, _, err := hj.Hijack()
-	return conn, err
 }
 
 /*

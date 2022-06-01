@@ -2,7 +2,9 @@ package gotunnel
 
 import (
 	"errors"
+	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -64,4 +66,23 @@ func acceptStream(session *yamux.Session) (net.Conn, error) {
 	case <-time.After(DefaultTimeout):
 		return nil, errors.New("timeout getting session")
 	}
+}
+
+//	Tunnel the data between connections.
+func copy(src, dst net.Conn, wg *sync.WaitGroup) {
+
+	wg.Add(2)
+
+	// proxy the request
+	go proxy(src, dst, wg)
+	go proxy(dst, src, wg)
+
+	// wait for data transfer to finish before closing the stream
+	wg.Wait()
+}
+
+//	Copy the data between two connections.
+func proxy(dst, src net.Conn, wg *sync.WaitGroup) {
+	defer wg.Done()
+	io.Copy(dst, src)
 }
