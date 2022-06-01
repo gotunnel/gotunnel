@@ -59,7 +59,7 @@ func TestConnection(t *testing.T) {
 			name: "hosted",
 			config: ClientConfig{
 				Address:            "http://whatever.tunnel.wah.al:80",
-				Token:              "secret-new",
+				Token:              "new",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
@@ -115,6 +115,8 @@ func TestConnection(t *testing.T) {
 				if resp.StatusCode != http.StatusOK {
 					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
 				}
+
+				//	time.Sleep(15 * time.Second)
 
 				//	Shutdown the client.
 				if err := c.Shutdown(); err != nil {
