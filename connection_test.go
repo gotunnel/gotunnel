@@ -106,7 +106,7 @@ func TestConnection(t *testing.T) {
 
 				wg.Wait()
 
-				/* //	Establish a new session by making a GET request.
+				//	Establish a new session by making a GET request.
 				resp, err := http.Get(tt.config.Address)
 				if err != nil {
 					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
@@ -114,9 +114,7 @@ func TestConnection(t *testing.T) {
 
 				if resp.StatusCode != http.StatusOK {
 					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
-				} */
-
-				time.Sleep(25 * time.Second)
+				}
 
 				//	Shutdown the client.
 				if err := c.Shutdown(); err != nil {

@@ -193,7 +193,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if filepath.Clean(r.URL.Path) == CONNECTION_PATH {
+	switch filepath.Clean(r.URL.Path) {
+
+	case CONNECTION_PATH:
 
 		// Check for CONNECT method
 		if r.Method != http.MethodConnect {
@@ -206,10 +208,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 
-		} else {
-
-			s.handleHTTP(w, r)
 		}
+
+	default:
+		s.handleHTTP(w, r)
 	}
 }
 
@@ -341,16 +343,15 @@ func acceptHandshake(conn net.Conn) error {
 //	if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
-	/* 	//	Check whether it's a Websocket connection.
-	   	if r.Method == http.MethodGet &&
-	   		headerContains(r.Header["Connection"], "upgrade") &&
-	   		headerContains(r.Header["Upgrade"], "websocket") {
+	//	Check whether it's a Websocket connection.
+	if r.Method == http.MethodGet &&
+		headerContains(r.Header["Connection"], "upgrade") &&
+		headerContains(r.Header["Upgrade"], "websocket") {
 
-	   		s.log.Println("handling websocket connection")
-	   		s.handleWSConnection(w, r)
-	   		return
-	   	}
-	*/
+		s.log.Println("handling websocket connection")
+		s.handleWSConnection(w, r)
+		return
+	}
 
 	host := r.URL.Hostname()
 

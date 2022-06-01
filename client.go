@@ -304,7 +304,7 @@ func (c *Client) listen(conn *tunnel) error {
 		case RequestClientSession:
 
 			//	Open a new stream with the server.
-			remote, err := c.session.Open()
+			remote, err := openStream(c.session)
 			if err != nil {
 				return err
 			}
@@ -314,54 +314,20 @@ func (c *Client) listen(conn *tunnel) error {
 				// Close the stream with server
 				defer remote.Close()
 
-				/* 				// Dial TCP connection to the service running locally on specified port.
-								//	For example, a separate file server.
-								localService, err := net.Dial(getNetwork(TCP), ":"+c.port)
-								if err != nil {
-									c.log.Println(err)
-									c.log.Println("failed to connect w/ server")
-								}
-								defer localService.Close()
-
-								// Copy the request over the tunnel.
-								copy(localService, remote, &c.requestWaitGroup)
-							}()
-						}
-					}
-				}
-				*/
-
-				// Tunnel the request to the local client.
-				if err := c.tunnel(remote); err != nil {
+				// Dial TCP connection to the service running locally on specified port.
+				//	For example, a separate file server.
+				localService, err := net.Dial(getNetwork(msg.Type), ":"+c.port)
+				if err != nil {
 					c.log.Println(err)
-					c.log.Println("failed to proxy data through tunnel")
+					c.log.Println("failed to connect w/ server")
 				}
+				defer localService.Close()
 
-				fmt.Println("tunnel closed")
+				// Copy the request over the tunnel.
+				copy(localService, remote, &c.requestWaitGroup)
 			}()
 		}
 	}
-}
-
-//	Tunnel the request to locally running client.
-func (c *Client) tunnel(remoteConnection net.Conn) error {
-
-	// Dial TCP connection with the local client.
-	localConnection, err := net.Dial(getNetwork(TCP), ":"+c.port)
-	if err != nil {
-		return err
-	}
-	defer localConnection.Close()
-
-	// proxy the request
-	c.requestWaitGroup.Add(2)
-	go proxy(localConnection, remoteConnection, &c.requestWaitGroup)
-	go proxy(remoteConnection, localConnection, &c.requestWaitGroup)
-
-	// wait for data transfer to finish before closing the stream
-	c.requestWaitGroup.Wait()
-
-	return nil
 }
 
 //	Gracefully disconnect the client from the server.
