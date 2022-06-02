@@ -39,16 +39,3 @@ func getProtocol(network string) Type {
 		return SSH
 	}
 }
-
-//	Matches and returns the network string from protocol type.
-func getNetwork(protocol Type) string {
-
-	switch protocol {
-	case HTTP, TCP, WS:
-		return "tcp"
-	case SSH:
-		return "ssh"
-	default:
-		return ""
-	}
-}

@@ -138,12 +138,12 @@ func (c *Client) changeState(value TunnelState) {
 func (c *Client) Init() error {
 
 	// Ensure the remote host is reachable
-	if err := ping(TCP, c.remote.Host); err != nil {
+	if err := ping(c.remote.Host); err != nil {
 		return err
 	}
 
 	// Ensure the local host is reachable
-	if err := ping(TCP, ":"+c.port); err != nil {
+	if err := ping(":" + c.port); err != nil {
 		return err
 	}
 
@@ -173,7 +173,7 @@ func (c *Client) Connect() error {
 		}
 
 		// Get a TLS tunnel
-		conn, err = tls.Dial(getNetwork(TCP), c.remote.Host, conf)
+		conn, err = tls.Dial("tcp", c.remote.Host, conf)
 		if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func (c *Client) Connect() error {
 	default:
 
 		// Get a normal TCP tunnel
-		conn, err = net.Dial(getNetwork(TCP), c.remote.Host)
+		conn, err = net.Dial("tcp", c.remote.Host)
 		if err != nil {
 			return err
 		}
@@ -286,13 +286,16 @@ func sendHandshake(conn net.Conn) error {
 	return nil
 }
 
-func (c *Client) listen(conn *tunnel) error {
+func (c *Client) listen(tunnel *tunnel) error {
+
+	c.log.Println("Client listening over the tunnel")
+
 	c.tunnelWaitGroup.Add(1)
 	defer c.tunnelWaitGroup.Done()
 
 	for {
 		var msg Protocol
-		if err := conn.dec.Decode(&msg); err != nil {
+		if err := tunnel.recv(&msg); err != nil {
 
 			c.log.Println("failed to unmarshal message from server")
 
@@ -311,12 +314,12 @@ func (c *Client) listen(conn *tunnel) error {
 
 			go func() {
 
-				// Close the stream with server
+				//	Close the stream when you are done.
 				defer remote.Close()
 
-				// Dial TCP connection to the service running locally on specified port.
+				//	Dial TCP connection to the service running locally on specified port.
 				//	For example, a separate file server.
-				localService, err := net.Dial(getNetwork(msg.Type), ":"+c.port)
+				localService, err := net.Dial("tcp", ":"+c.port)
 				if err != nil {
 					c.log.Println(err)
 					c.log.Println("failed to connect w/ server")
@@ -324,14 +327,17 @@ func (c *Client) listen(conn *tunnel) error {
 				defer localService.Close()
 
 				// Copy the request over the tunnel.
-				copy(localService, remote, &c.requestWaitGroup)
+				copy(localService, remote, c.requestWaitGroup)
 			}()
 		}
 	}
 }
 
-//	Gracefully disconnect the client from the server.
+//	Gracefully disconnect the client from the server
+//	after waiting for all the pending requests to complete.
 func (c *Client) Shutdown() error {
+
+	c.log.Println("Shutting down the client")
 
 	//	Wait until all requests are finished
 	c.requestWaitGroup.Wait()

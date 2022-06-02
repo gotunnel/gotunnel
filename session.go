@@ -69,13 +69,13 @@ func acceptStream(session *yamux.Session) (net.Conn, error) {
 }
 
 //	Tunnel the data between connections.
-func copy(src, dst net.Conn, wg *sync.WaitGroup) {
+func copy(src, dst net.Conn, wg sync.WaitGroup) {
 
 	wg.Add(2)
 
 	// proxy the request
-	go proxy(src, dst, wg)
-	go proxy(dst, src, wg)
+	go proxy(src, dst, &wg)
+	go proxy(dst, src, &wg)
 
 	// wait for data transfer to finish before closing the stream
 	wg.Wait()

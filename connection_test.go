@@ -2,6 +2,8 @@ package gotunnel
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
@@ -12,7 +14,7 @@ import (
 const (
 
 	//	Remote server address
-	remoteAddr = "0.0.0.0:9000"
+	remoteAddr = "localhost:3000"
 
 	//	Local port
 	localPort = "8080"
@@ -29,9 +31,13 @@ func TestConnection(t *testing.T) {
 	//	Launch a local file server for testing.
 	fsServer := fileServer(localPort, ".")
 
+	//	Initialize a temporary logger
+	logger := log.Default()
+
 	//	Launch remote proxy server.
 	go StartServer(&ServerConfig{
 		Address: remoteAddr,
+		Logger:  logger,
 	})
 
 	//	Add a delay to allow servers to start.
@@ -40,7 +46,7 @@ func TestConnection(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  ClientConfig
-		wantErr bool
+		wantErr error
 		run     bool
 	}{
 		{
@@ -51,9 +57,9 @@ func TestConnection(t *testing.T) {
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
+				Logger:             logger,
 			},
-			wantErr: false,
-			run:     true,
+			run: true,
 		},
 		{
 			name: "hosted",
@@ -64,8 +70,7 @@ func TestConnection(t *testing.T) {
 				State:              state,
 				InsecureSkipVerify: true,
 			},
-			wantErr: false,
-			run:     false,
+			run: false,
 		},
 	}
 
@@ -74,7 +79,7 @@ func TestConnection(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 
 				c, err := NewClient(&tt.config)
-				if err != nil {
+				if err != nil && err != tt.wantErr {
 					t.Errorf("Failed to create client, err = %v, wantErr %v", err, tt.wantErr)
 				}
 
@@ -85,22 +90,16 @@ func TestConnection(t *testing.T) {
 						change := <-state
 
 						switch *change {
-						case Connecting:
-							log.Println("Establishing tunnel")
 						case Connected:
-							log.Println("Tunnel connected")
 							wg.Done()
-						case Disconnected:
-							log.Println("Tunnel disconnected")
 						}
 					}
 				}()
 
 				//	Connect the client to the server.
 				go func() {
-					if err := c.Connect(); (err != nil) != tt.wantErr {
+					if err := c.Connect(); err != nil && err != tt.wantErr {
 						t.Errorf("Client failed to connect, error = %v, wantErr %v", err, tt.wantErr)
-						wg.Done()
 					}
 				}()
 
@@ -108,9 +107,12 @@ func TestConnection(t *testing.T) {
 
 				//	Establish a new session by making a GET request.
 				resp, err := http.Get(tt.config.Address)
-				if err != nil {
+				if err != nil && err != tt.wantErr {
 					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 				}
+
+				body, _ := ioutil.ReadAll(resp.Body)
+				fmt.Println(string(body))
 
 				if resp.StatusCode != http.StatusOK {
 					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
@@ -119,11 +121,10 @@ func TestConnection(t *testing.T) {
 				//	time.Sleep(15 * time.Second)
 
 				//	Shutdown the client.
-				if err := c.Shutdown(); err != nil {
+				if err := c.Shutdown(); err != nil && err != tt.wantErr {
 					t.Errorf("Failed to shutdown client, error = %v, wantErr %v", err, tt.wantErr)
 				}
 			})
-
 		}
 	}
 
@@ -145,7 +146,6 @@ func fileServer(port, directory string) http.Server {
 		Handler: router,
 	}
 
-	log.Printf("Serving on HTTP port: %s\n", port)
 	go server.ListenAndServe()
 
 	return server

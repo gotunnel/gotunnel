@@ -32,8 +32,8 @@ type Server struct {
 	//	Each session is mapped with a unique identifier.
 	sessions *cache.Cache
 
-	//	connCh is used to publish accepted tunnels for tcp tunnels.
-	// connCh chan net.Conn
+	//	tunnelCh is used to publish accepted tunnels for tcp tunnels.
+	tunnelCh chan net.Conn
 
 	//	Server Configuration
 	config *ServerConfig
@@ -116,6 +116,13 @@ type ServerConfig struct {
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
+
+	//	Read-only Channel on which every new tunnel
+	//	connection is transmitted to.
+	//
+	//	It's advisable to assign this channel,
+	//	for better debugging on the vendor's side.
+	TunnelChan chan net.Conn
 }
 
 //	Functions to be called after hitting specific checkpoints.
@@ -133,6 +140,14 @@ type Callbacks struct {
 	//	OnDistunnel func(http.ResponseWriter, *http.Request) error
 }
 
+//	Updates server's active tunnel connections.
+func (c *Server) changeState(value net.Conn) {
+
+	if c.tunnelCh != nil {
+		c.tunnelCh <- value
+	}
+}
+
 //	Creates a new server, based on the supplied configuration.
 //	And starts listening on the new server.
 func StartServer(config *ServerConfig) error {
@@ -145,6 +160,10 @@ func StartServer(config *ServerConfig) error {
 		tunnels:  cache.New(cache.NoExpiration, config.Expiration),
 		sessions: cache.New(cache.NoExpiration, config.Expiration),
 		log:      &log.Logger{},
+	}
+
+	if config.TunnelChan != nil {
+		server.tunnelCh = config.TunnelChan
 	}
 
 	if config.Logger == nil {
@@ -197,13 +216,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case CONNECTION_PATH:
 
-		// Check for CONNECT method
+		//	Check for CONNECT method
 		if r.Method != http.MethodConnect {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 
-		// begin tunnel creation
+		//	Initiate tunnel creation
 		if err := s.tunnelCreationHandler(w, r); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -211,7 +230,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	default:
-		s.handleHTTP(w, r)
+
+		//	Serve the request over the tunnel.
+		if err := s.handleHTTP(w, r); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+
+		}
 	}
 }
 
@@ -220,16 +245,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
 	hostname := r.URL.Hostname()
-	s.log.Println("Initiating Tunnel Creation")
 
-	// fetch the auth token the client has sent
+	//	Fetch the auth token the client has sent
 	token := r.Header.Get(TokenHeader)
 
 	if token == "" {
 		return errors.New("token header not found")
 	}
 
-	// Check whether a tunnel associated with this token already exists
+	//	Check whether a tunnel associated with this token already exists
 	if _, exists := s.tunnels.Get(hostname); exists {
 		return errors.New("tunnel for this hostname already exists")
 	}
@@ -316,7 +340,9 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		s.config.Callbacks.OnConnection(w, r)
 	}
 
-	s.log.Printf("Tunnel established successfully for %s", tunnel.host)
+	//	Update the tunnel on state channel.
+	s.tunnelCh <- tunnel.conn
+
 	return nil
 }
 
@@ -341,24 +367,26 @@ func acceptHandshake(conn net.Conn) error {
 
 //	Responsible for tunnelling all incoming requests,
 //	if their hostname, already has a tunnel.
-func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	//	Check whether it's a Websocket connection.
 	if r.Method == http.MethodGet &&
 		headerContains(r.Header["Connection"], "upgrade") &&
 		headerContains(r.Header["Upgrade"], "websocket") {
 
-		s.log.Println("handling websocket connection")
-		s.handleWSConnection(w, r)
-		return
+		return s.handleWSConnection(w, r)
 	}
+
+	s.log.Println("Handling incoming HTTP request")
 
 	host := r.URL.Hostname()
 
-	stream, err := s.dial(host, HTTP)
+	stream, err := s.dial(host, Protocol{
+		Action: RequestClientSession,
+		Type:   HTTP,
+	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return err
 	}
 
 	//	Close the stream once the request is handled.
@@ -366,24 +394,25 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Send the request over that session/stream
 	if err := r.Write(stream); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return err
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
-		http.Error(w, "read from tunnel: "+err.Error(), http.StatusBadGateway)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	// Return the response from the client, on the responsewriter
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, err = io.Copy(w, resp.Body)
+	return err
 }
 
-func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
+func (s *Server) dial(host string, message Protocol) (net.Conn, error) {
+
+	s.log.Println("Dialing a connection to client")
 
 	// Get the tunnel associated with that host
 	payload, exists := s.tunnels.Get(host)
@@ -401,19 +430,14 @@ func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
 
 	session := fetchedSession.(*yamux.Session)
 
-	msg := Protocol{
-		Action: RequestClientSession,
-		Type:   protocol,
-	}
-
 	// ask client to open a session to us, so we can accept it
-	if err := tunnel.send(msg); err != nil {
+	if err := tunnel.send(message); err != nil {
 		// we might have several issues here, either the stream is closed, or
 		// the session is going be shut down, the underlying tunnel might
 		// be broken. In all cases, it's not reliable anymore having a client
 		// session.
 		tunnel.conn.Close()
-		s.tunnels.Delete(host)
+		s.tunnels.Delete(tunnel.host)
 
 		s.log.Println("client did not open a session")
 		return nil, err
@@ -424,17 +448,20 @@ func (s *Server) dial(host string, protocol Type) (net.Conn, error) {
 }
 
 // Permanently listens for incoming messages on the tunnel
-func (s *Server) listen(c *tunnel) {
+func (s *Server) listen(t *tunnel) {
+
+	s.log.Println("Server listening over the tunnel")
+
 	for {
 		var msg map[string]interface{}
-		err := c.dec.Decode(&msg)
+		err := t.dec.Decode(&msg)
 		if err != nil {
 
 			// Close the tunnel
-			c.Close()
+			t.Close()
 
 			// Delete the tunnel
-			s.tunnels.Delete(c.host)
+			s.tunnels.Delete(t.host)
 
 			if err != io.EOF {
 				s.log.Printf("decode err: %s", err)
@@ -461,7 +488,9 @@ func hijack(w http.ResponseWriter) (net.Conn, error) {
 	return conn, err
 }
 
-func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) error {
+
+	s.log.Println("Handling incoming WebSocket request")
 
 	// Hijack the incoming request for a new session.
 	// This will now allow us to control this tunnel
@@ -469,49 +498,51 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) {
 	// http.Handler to close it as soon as the request has been completed.
 	conn, err := hijack(w)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return err
 	}
 
 	// Get the host from the request.
 	host := r.URL.Hostname()
 
 	//	Start a stream with the client.
-	stream, err := s.dial(host, WS)
+	stream, err := s.dial(host, Protocol{
+		Action: RequestClientSession,
+		Type:   WS,
+	})
+
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return err
 	}
 
 	//	Write the websocket upgrade request back to the original request.
 	if err := r.Write(stream); err != nil {
-		http.Error(w, "unable to write upgrade request: "+err.Error(), http.StatusBadGateway)
 		stream.Close()
-		return
+		return err
 	}
 
 	//	Read the response.
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
-		http.Error(w, "unable to read upgrade response: "+err.Error(), http.StatusBadGateway)
 		stream.Close()
-		return
+		return err
 	}
 
 	//	Write the upgrade response back to the original connection.
 	if err := resp.Write(conn); err != nil {
-		http.Error(w, "unable to write upgrade response: "+err.Error(), http.StatusBadGateway)
 		stream.Close()
-		return
+		return err
 	}
 
 	//	Start proxying the data to and fro, in parallel goroutines.
-	copy(conn, stream, &sync.WaitGroup{})
+	copy(conn, stream, sync.WaitGroup{})
 
 	//	Close both the stream w/ client, and the original session connection,
 	//	once you are done proxying.
-	stream.Close()
-	conn.Close()
+	if err := stream.Close(); err != nil {
+		return err
+	}
+
+	return conn.Close()
 }
 
 /*

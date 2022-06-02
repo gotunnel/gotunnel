@@ -28,7 +28,7 @@ func GetPort(low, hi int) int {
 
 func portAvaiable(port string) bool {
 
-	ln, err := net.Listen(getNetwork(TCP), ":"+port)
+	ln, err := net.Listen("tcp", ":"+port)
 
 	if err != nil {
 		return false
@@ -39,14 +39,23 @@ func portAvaiable(port string) bool {
 }
 
 //	Dials a connection to ping the server
-func ping(protocol Type, address string) error {
+func ping(address string) error {
 
-	_, err := net.DialTimeout(getNetwork(protocol), address, time.Duration(1*time.Second))
+	_, err := net.DialTimeout("tcp", address, time.Duration(1*time.Second))
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func isTLS(conn net.Conn) bool {
+	switch conn.(type) {
+	case *tls.Conn:
+		return true
+	default:
+		return false
+	}
 }
 
 func scheme(conn net.Conn) (scheme string) {

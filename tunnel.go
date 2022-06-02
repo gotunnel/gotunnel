@@ -42,38 +42,41 @@ type tunnel struct {
 	//	credentials Credentials
 }
 
-func (c *tunnel) Close() error {
-	if c == nil {
+func (t *tunnel) Close() error {
+
+	if t == nil {
 		return nil
 	}
 
-	c.closed = true
+	t.closed = true
 
-	return c.conn.Close()
+	return t.conn.Close()
 }
 
-func (c *tunnel) send(v interface{}) error {
-	if c.enc == nil {
+func (t *tunnel) send(v interface{}) error {
+
+	if t.enc == nil {
 		return errors.New("encoder is not initialized")
 	}
 
-	if c.closed {
+	if t.closed {
 		return errors.New("tunnel is closed")
 	}
 
-	return c.enc.Encode(v)
+	return t.enc.Encode(v)
 }
 
-func (c *tunnel) recv(v interface{}) error {
-	if c.dec == nil {
+func (t *tunnel) recv(v interface{}) error {
+
+	if t.dec == nil {
 		return errors.New("decoder is not initialized")
 	}
 
-	if c.closed {
+	if t.closed {
 		return errors.New("tunnel is closed")
 	}
 
-	return c.dec.Decode(v)
+	return t.dec.Decode(v)
 }
 
 /*
