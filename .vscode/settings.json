@@ -1,6 +1,0 @@
-{
-    "testing.saveBeforeTest": true,
-    "go.testFlags": [
-    "-count=1"
-    ]
-}
