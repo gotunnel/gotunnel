@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	//	Default timeout value used in connection requests.
+	DefaultTimeout = 10 * time.Second
+)
+
 func GetPort(low, hi int) int {
 
 	// generate a random port value
@@ -47,6 +52,18 @@ func ping(address string) error {
 	}
 
 	return nil
+}
+
+//	Validates whether an array contains a supplied value or not.
+func contains[x comparable](payload x, array []x) bool {
+
+	for index := 0; index < len(array); index++ {
+		if array[index] == payload {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isTLS(conn net.Conn) bool {
@@ -110,4 +127,18 @@ func headerContains(header []string, value string) bool {
 	}
 
 	return false
+}
+
+//	Generate random identifier token for client.
+func generateIdentifier(n int) string {
+
+	rand.Seed(time.Now().UnixNano())
+
+	var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
 }

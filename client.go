@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -14,6 +15,12 @@ import (
 	"net/url"
 
 	"github.com/hashicorp/yamux"
+)
+
+var (
+
+	//	Errors
+	ErrRemoteUnreachable = errors.New("server not reachable")
 )
 
 type (
@@ -40,9 +47,7 @@ type (
 		// current state is transmitted to.
 		state chan<- *TunnelState
 
-		// Contains the established tunnel state
-		// tunnel tunnel
-
+		//	Maintains the established tunnel.
 		session *yamux.Session
 
 		requestWaitGroup sync.WaitGroup
@@ -74,10 +79,11 @@ type (
 		//	Disabling certificate verification makes your tunnel vulnerable to man-in-the-middle attacks.
 		InsecureSkipVerify bool
 
-		// Authentication token.
-		// Will also be used as a unique identifier
-		// by the server for storing tunnel tunnel.
-		Token string
+		//	Identification token unique to every tunnel.
+		//	If you don't pass one, we will automatically generate one.
+		//	Use this value to override the auto-generated identifier.
+		//	Used by the server for storing and mapping every tunnel.
+		Identifier string
 
 		//	Basic Auth.
 		//	To password-protect your expose server.
@@ -104,9 +110,13 @@ func NewClient(config *ClientConfig) (*Client, error) {
 
 	client := &Client{
 		port:       config.Port,
-		identifier: config.Token,
+		identifier: config.Identifier,
 		config:     config,
 		log:        &log.Logger{},
+	}
+
+	if client.identifier == "" {
+		client.identifier = generateIdentifier(10)
 	}
 
 	if config.State != nil {
@@ -143,11 +153,7 @@ func (c *Client) Init() error {
 	}
 
 	// Ensure the local host is reachable
-	if err := ping(":" + c.port); err != nil {
-		return err
-	}
-
-	return nil
+	return ping(":" + c.port)
 }
 
 func (c *Client) Connect() error {
@@ -187,14 +193,14 @@ func (c *Client) Connect() error {
 		}
 	}
 
-	remoteURL := fmt.Sprint(c.remote.Scheme, "://", conn.RemoteAddr(), CONNECTION_PATH)
+	remoteURL := fmt.Sprint(c.remote.String(), CONNECTION_PATH)
 	req, err := http.NewRequest(http.MethodConnect, remoteURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
 	// Set the auth token in gotunnel identification header
-	req.Header.Set(TokenHeader, c.identifier)
+	req.Header.Set(IdentifierHeader, c.identifier)
 
 	// Send the CONNECT Request to request a tunnel from the server
 	if err := req.Write(conn); err != nil {
@@ -213,10 +219,10 @@ func (c *Client) Connect() error {
 	if resp.StatusCode != http.StatusOK || resp.Status != TunnelConnected {
 		out, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("tunnel server error: status=%d, error=%s", resp.StatusCode, err)
+			return fmt.Errorf("server error: status=%d, error=%s", resp.StatusCode, err)
 		}
 
-		return fmt.Errorf("tunnel server error: status=%d, body=%s", resp.StatusCode, string(out))
+		return fmt.Errorf("server error: status=%d, body=%s", resp.StatusCode, string(out))
 	}
 
 	// wait until previous listening funcs observes distunnel
@@ -304,7 +310,7 @@ func (c *Client) listen(tunnel *tunnel) error {
 		}
 
 		switch msg.Action {
-		case RequestClientSession:
+		case RequestSession:
 
 			//	Open a new stream with the server.
 			remote, err := openStream(c.session)

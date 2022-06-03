@@ -2,8 +2,7 @@ package gotunnel
 
 import (
 	"context"
-	"fmt"
-	"io/ioutil"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
@@ -53,7 +52,6 @@ func TestConnection(t *testing.T) {
 			name: "local",
 			config: ClientConfig{
 				Address:            "http://" + remoteAddr,
-				Token:              "secret",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
@@ -62,10 +60,21 @@ func TestConnection(t *testing.T) {
 			run: true,
 		},
 		{
+			name: "duplicate",
+			config: ClientConfig{
+				Address:            "http://" + remoteAddr,
+				Port:               localPort,
+				State:              state,
+				InsecureSkipVerify: true,
+				Logger:             logger,
+			},
+			wantErr: errors.New("tunnel for this hostname already exists"),
+			run:     true,
+		},
+		{
 			name: "hosted",
 			config: ClientConfig{
 				Address:            "http://whatever.tunnel.wah.al:80",
-				Token:              "new",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
@@ -100,6 +109,7 @@ func TestConnection(t *testing.T) {
 				go func() {
 					if err := c.Connect(); err != nil && err != tt.wantErr {
 						t.Errorf("Client failed to connect, error = %v, wantErr %v", err, tt.wantErr)
+						wg.Done()
 					}
 				}()
 
@@ -111,9 +121,9 @@ func TestConnection(t *testing.T) {
 					t.Errorf("GET request failed, error = %v, wantErr %v", err, tt.wantErr)
 				}
 
-				body, _ := ioutil.ReadAll(resp.Body)
-				fmt.Println(string(body))
-
+				/* 				body, _ := ioutil.ReadAll(resp.Body)
+				   				fmt.Println(string(body))
+				*/
 				if resp.StatusCode != http.StatusOK {
 					t.Errorf("Invalid response code = %v, wantErr %v", http.StatusOK, tt.wantErr)
 				}

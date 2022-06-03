@@ -20,12 +20,17 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
-// Server is responsible for proxying public tunnels to the client over a
-// tunnel tunnel. It also listens to control messages from the client.
-type Server struct {
+var (
 
-	//	Contains all tunnels established with multiple clients.
-	//	tunnels Connections
+	//	Errors
+	ErrTunnelNotAllowed         = errors.New("host restricted from tunnelling")
+	ErrIdentifierHeaderNotFound = errors.New("identifier header not found")
+	ErrIdentifierNotFound       = errors.New("identifier not found")
+)
+
+// Server is responsible for proxying public tunnels to the client over a
+// tunnel connection. It also listens to control messages from the client.
+type Server struct {
 
 	//	In-memory cache for storing active sessions.
 	//	Sessions provides multiplexing over one tunnel.
@@ -123,6 +128,22 @@ type ServerConfig struct {
 	//	It's advisable to assign this channel,
 	//	for better debugging on the vendor's side.
 	TunnelChan chan net.Conn
+
+	//	Allowed Host Whitelist.
+	//	You can save the list of hosts or subdomains
+	//	only which should be allowed to have a tunnel.
+	//
+	//	Any tunnel creation request received on any other host or subdomain
+	//	will automatically be rejected.
+	Whitelist []string
+
+	//	Blacklist of hosts or subdomains restricted from tunnelling.
+	//	Any tunnel creation request received on any of these hosts or subdomains
+	//	will automatically be rejected.
+	//
+	//	You should ideally only save either whitelists or blacklists of hosts.
+	//	But not both.
+	Blacklist []string
 }
 
 //	Functions to be called after hitting specific checkpoints.
@@ -141,7 +162,7 @@ type Callbacks struct {
 }
 
 //	Updates server's active tunnel connections.
-func (c *Server) changeState(value net.Conn) {
+func (c *Server) publishTunnel(value net.Conn) {
 
 	if c.tunnelCh != nil {
 		c.tunnelCh <- value
@@ -246,16 +267,30 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	hostname := r.URL.Hostname()
 
+	s.log.Println("Fetching tunnel corresponding to host: ", hostname)
+
+	//	Validate the requested host against whitelist.
+	if len(s.config.Whitelist) > 0 {
+		if !contains(hostname, s.config.Whitelist) {
+			return ErrTunnelNotAllowed
+		}
+	}
+
+	//	Validate the requested host against blacklist.
+	if contains(hostname, s.config.Blacklist) {
+		return ErrTunnelNotAllowed
+	}
+
 	//	Fetch the auth token the client has sent
-	token := r.Header.Get(TokenHeader)
+	token := r.Header.Get(IdentifierHeader)
 
 	if token == "" {
-		return errors.New("token header not found")
+		return ErrIdentifierHeaderNotFound
 	}
 
 	//	Check whether a tunnel associated with this token already exists
-	if _, exists := s.tunnels.Get(hostname); exists {
-		return errors.New("tunnel for this hostname already exists")
+	if _, exists := s.tunnels.Get(r.Host); exists {
+		return ErrTunnelExists
 	}
 
 	// If the server config has an Authentication Middleware,
@@ -326,10 +361,10 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		enc:   json.NewEncoder(stream),
 		conn:  stream,
 		token: token,
-		host:  r.URL.Hostname(),
+		host:  hostname,
 	}
 
-	s.tunnels.Set(r.URL.Hostname(), tunnel, s.config.Expiration)
+	s.tunnels.Set(hostname, tunnel, s.config.Expiration)
 
 	// Start listening for incoming messages
 	// in a separate goroutine.
@@ -341,7 +376,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	}
 
 	//	Update the tunnel on state channel.
-	s.tunnelCh <- tunnel.conn
+	s.publishTunnel(tunnel.conn)
 
 	return nil
 }
@@ -379,10 +414,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	s.log.Println("Handling incoming HTTP request")
 
-	host := r.URL.Hostname()
-
-	stream, err := s.dial(host, Protocol{
-		Action: RequestClientSession,
+	stream, err := s.dial(r.URL.Hostname(), Protocol{
+		Action: RequestSession,
 		Type:   HTTP,
 	})
 	if err != nil {
@@ -414,21 +447,15 @@ func (s *Server) dial(host string, message Protocol) (net.Conn, error) {
 
 	s.log.Println("Dialing a connection to client")
 
-	// Get the tunnel associated with that host
-	payload, exists := s.tunnels.Get(host)
-	if !exists {
-		return nil, errors.New("no tunnel exists for this host")
+	tunnel, err := s.getTunnel(host)
+	if err != nil {
+		return nil, err
 	}
 
-	tunnel := payload.(tunnel)
-
-	// Get the session associated with this token
-	fetchedSession, exists := s.sessions.Get(tunnel.token)
-	if !exists {
-		return nil, errors.New("no session exists with this host")
+	session, err := s.getSessionFromTunnel(tunnel)
+	if err != nil {
+		return nil, err
 	}
-
-	session := fetchedSession.(*yamux.Session)
 
 	// ask client to open a session to us, so we can accept it
 	if err := tunnel.send(message); err != nil {
@@ -445,6 +472,55 @@ func (s *Server) dial(host string, message Protocol) (net.Conn, error) {
 
 	//	Accept the incoming stream from client.
 	return acceptStream(session)
+}
+
+//	Fetches the saved tunnel corresponding to supplied hostname.
+func (s *Server) getTunnel(host string) (tunnel, error) {
+
+	s.log.Println("Fetching tunnel corresponding to host: ", host)
+
+	// Get the tunnel associated with that host
+	payload, exists := s.tunnels.Get(host)
+	if !exists {
+		return tunnel{}, ErrTunnelNotFound
+	}
+
+	return payload.(tunnel), nil
+}
+
+//	First fetches the tunnel from given hostname,
+//	followed by its corresponding session.
+func (s *Server) getSessionFromHost(host string) (*yamux.Session, error) {
+
+	s.log.Println("Fetching session corresponding to host: ", host)
+
+	// Get the tunnel associated with that host
+	tunnel, err := s.getTunnel(host)
+	if err != nil {
+		return nil, err
+	}
+
+	//	Get the session associated with this token
+	fetchedSession, exists := s.sessions.Get(tunnel.token)
+	if !exists {
+		return nil, ErrSessionNotFound
+	}
+
+	return fetchedSession.(*yamux.Session), nil
+}
+
+//	Fetches the session corresponding to supplied tunnel.
+func (s *Server) getSessionFromTunnel(t tunnel) (*yamux.Session, error) {
+
+	s.log.Println("Fetching session corresponding to host: ", t.host)
+
+	//	Get the session associated with this token
+	fetchedSession, exists := s.sessions.Get(t.token)
+	if !exists {
+		return nil, ErrSessionNotFound
+	}
+
+	return fetchedSession.(*yamux.Session), nil
 }
 
 // Permanently listens for incoming messages on the tunnel
@@ -506,7 +582,7 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) erro
 
 	//	Start a stream with the client.
 	stream, err := s.dial(host, Protocol{
-		Action: RequestClientSession,
+		Action: RequestSession,
 		Type:   WS,
 	})
 
@@ -514,33 +590,28 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 
+	//	Close both the stream w/ client, and the original session connection,
+	//	once you are done proxying.
+	defer stream.Close()
+
 	//	Write the websocket upgrade request back to the original request.
 	if err := r.Write(stream); err != nil {
-		stream.Close()
 		return err
 	}
 
 	//	Read the response.
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
-		stream.Close()
 		return err
 	}
 
 	//	Write the upgrade response back to the original connection.
 	if err := resp.Write(conn); err != nil {
-		stream.Close()
 		return err
 	}
 
 	//	Start proxying the data to and fro, in parallel goroutines.
 	copy(conn, stream, sync.WaitGroup{})
-
-	//	Close both the stream w/ client, and the original session connection,
-	//	once you are done proxying.
-	if err := stream.Close(); err != nil {
-		return err
-	}
 
 	return conn.Close()
 }

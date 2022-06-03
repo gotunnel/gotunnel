@@ -7,16 +7,23 @@ type Type int
 type Action int
 
 const (
+
+	//	Protocols
 	HTTP Type = iota + 1
 	TCP
 	WS
 	SSH
 
-	Requested Type = iota
-	Accepted
-	Established
+	//	Actions
+	RequestSession Action = iota + 1
 
-	RequestClientSession Action = iota + 1
+	//	Handshakes
+	//
+	// HandshakeRequest is hello message sent by client to server.
+	HandshakeRequest = "gotunnelHandshakeRequest"
+
+	// HandshakeResponse is response to HandshakeRequest sent by server to client.
+	HandshakeResponse = "gotunnelHandshakeOk"
 )
 
 // Custom gotunnel protocol

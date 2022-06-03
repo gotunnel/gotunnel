@@ -10,6 +10,14 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
+var (
+
+	//	Errors
+	ErrSessionNotFound = errors.New("no session active for this tunnel")
+	ErrSessionTimeout  = errors.New("session request timed out")
+	ErrSessionClosed   = errors.New("session is closed")
+)
+
 //	Opens a new stream with the supplied yamux session
 //	and waits for the other side to accept the stream.
 func openStream(session *yamux.Session) (net.Conn, error) {
@@ -30,7 +38,7 @@ func openStream(session *yamux.Session) (net.Conn, error) {
 	case err := <-async(openStream):
 		if err != nil {
 			if session.IsClosed() {
-				return nil, errors.New("session is closed")
+				return nil, ErrSessionClosed
 			}
 			return nil, err
 		}
@@ -39,7 +47,7 @@ func openStream(session *yamux.Session) (net.Conn, error) {
 		if stream != nil {
 			stream.Close()
 		}
-		return nil, errors.New("timeout opening session")
+		return nil, ErrSessionTimeout
 	}
 }
 
@@ -59,12 +67,12 @@ func acceptStream(session *yamux.Session) (net.Conn, error) {
 	case err := <-async(acceptStream):
 		if err != nil {
 			if session.IsClosed() {
-				return nil, errors.New("session is closed")
+				return nil, ErrSessionClosed
 			}
 		}
 		return stream, err
 	case <-time.After(DefaultTimeout):
-		return nil, errors.New("timeout getting session")
+		return nil, ErrSessionTimeout
 	}
 }
 

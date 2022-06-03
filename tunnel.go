@@ -15,6 +15,21 @@ const (
 	Connecting
 	Connected
 	Disconnected // keep it always last
+
+	// ClientIdentifierHeader is header carrying information about tunnel identifier.
+	IdentifierHeader = "x-gotunnel-identifier"
+
+	// Connected is message sent by server to client when control connection was established.
+	TunnelConnected = "200 gotunnel established"
+
+	CONNECTION_PATH = "/_connectPath"
+)
+
+var (
+
+	//	Errors
+	ErrTunnelExists   = errors.New("tunnel already exists")
+	ErrTunnelNotFound = errors.New("no tunnel exists for this host")
 )
 
 //	Primary structure for a client-server tunnel.
