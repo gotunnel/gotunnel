@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,44 +53,53 @@ type Server struct {
 // Server config specified by the user.
 type ServerConfig struct {
 
-	// if not nil decorates http requests
-	// before forwarding them to client.
+	//	Director is generally used to decorate/modify
+	//	an incoming HTTP request before proceeding to serve them using handlers.
+	//	This is run for every single incoming request independent of its objective.
+	//
+	//	If you want to interact with requests depending on their objectives
+	//	i.e. a tunnel creation request or a tunnel access request,
+	//	then use the Middleware structure, and not directors.
 	Director func(*http.Request)
 
-	//
-	// Authentication Middleware For Tunnels
-	//
-	// A function that you can attach to the server
-	// for authenticating every tunnel creation request,
-	// before you begin the process of creating the tunnel.
+	//	Middlewares are functions that are run before handling
+	//	incoming requests depending on their objectives.
+	//	They take the incoming HTTP request, and returns an error.
+	//	If the error != nil, it is returned to the client with status 400 (Bad Request).
+	Middlewares struct {
 
-	//	Example: You want to ascertain that the user
-	//	sending a new tunnel creation request to your gotunnel server,
-	//	actually has a registered account in your service or not,
-	//	along with their auth tokens.
+		//	This middleware is run for every incoming tunnel creation request.
+		//	For example, to establish a new tunnel from local client to xyz.example.com.
+		//
+		//	Example: You can use it to validate the hostname of requested URL
+		//	against your whitelist or blacklists i.e. whether to allow a tunnel on
+		//	the requested hostname or not.
+		//
+		//	Example: You can authenticate users who are requesting a new tunnel
+		//	against your database.
+		Creator func(*http.Request) error
 
-	// You can supply your custom authentication function.
+		//	This middleware is run for every incoming tunnel access request.
+		//	For example, to access an already exposed service on xyz.example.com.
+		//
+		//	Example: You can use it to authenticate every access request
+		//	against your database using authorization headers or Basic Auth (username and password).
+		Access func(*http.Request) error
+	}
 
-	// It takes an HTTP request and returns an error.
-	// If the error is nil, then authentication is complete,
-	// and server will continue with the tunnel creation procedure.
-	// If the error is NOT nil, server will return the error,
-	// to the client, without proceeding ahead with hijacking.
-	Auth func(*http.Request) error
-
-	//	Address on which the server is publicly listening for incoming requests.
+	//	Local address on which the server is publicly listening for incoming requests.
 	//	Example: :80.
 	//	If a secure scheme (ex. HTTPS) is used,
 	//	then it is mandatory to supply certificate and key file.
 	Address string
 
-	// TLS Certificate File
+	//	TLS Certificate File
 	//
 	//	If a secure scheme (ex. HTTPS) is used,
 	//	then it is mandatory to supply certificate and key file.
 	Certificate string
 
-	// Certificate key file
+	//	Certificate key file
 	//
 	//	If a secure scheme (ex. HTTPS) is used,
 	//	then it is mandatory to supply certificate and key file.
@@ -129,19 +137,25 @@ type ServerConfig struct {
 	//	for better debugging on the vendor's side.
 	TunnelChan chan net.Conn
 
-	//	Allowed Host Whitelist.
-	//	You can save the list of hosts or subdomains
+	//	Allowed Hostname Whitelist.
+	//	Example: ["xyz.example.com", "abc.example.com"]
+	//	You can save the list of hostnames
 	//	only which should be allowed to have a tunnel.
 	//
-	//	Any tunnel creation request received on any other host or subdomain
-	//	will automatically be rejected.
-	Whitelist []string
-
-	//	Blacklist of hosts or subdomains restricted from tunnelling.
-	//	Any tunnel creation request received on any of these hosts or subdomains
+	//	Any tunnel creation request received on any other hostname
 	//	will automatically be rejected.
 	//
-	//	You should ideally only save either whitelists or blacklists of hosts.
+	//	You should ideally only save either whitelists or blacklists of hostnames.
+	//	But not both.
+	Whitelist []string
+
+	//	Blacklist of hostnames restricted from tunnelling.
+	//	Example: ["xyz.example.com", "abc.example.com"]
+	//
+	//	Any tunnel creation request received on any of these hostnames
+	//	will automatically be rejected.
+	//
+	//	You should ideally only save either whitelists or blacklists of hostnames.
 	//	But not both.
 	Blacklist []string
 }
@@ -227,12 +241,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.config.Director(r)
 	}
 
-	// TODO: Add more URL validation checks
-	if strings.ToLower(r.Host) == "" {
-		http.Error(w, "host is empty", http.StatusBadRequest)
-		return
-	}
-
 	switch filepath.Clean(r.URL.Path) {
 
 	case CONNECTION_PATH:
@@ -265,7 +273,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to initiate the procedure to creating a new tunnel with that client.
 func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) error {
 
-	hostname := r.URL.Hostname()
+	hostname := getHostname(r)
 
 	s.log.Println("Fetching tunnel corresponding to host: ", hostname)
 
@@ -281,22 +289,22 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 		return ErrTunnelNotAllowed
 	}
 
-	//	Fetch the auth token the client has sent
-	token := r.Header.Get(IdentifierHeader)
+	/* 	//	Fetch the auth token the client has sent
+	   	token := r.Header.Get(IdentifierHeader)
 
-	if token == "" {
-		return ErrIdentifierHeaderNotFound
-	}
-
+	   	if token == "" {
+	   		return ErrIdentifierHeaderNotFound
+	   	}
+	*/
 	//	Check whether a tunnel associated with this token already exists
 	if _, exists := s.tunnels.Get(r.Host); exists {
 		return ErrTunnelExists
 	}
 
-	// If the server config has an Authentication Middleware,
-	// trigger that function, before proceeding forward
-	if s.config.Auth != nil {
-		if err := s.config.Auth(r); err != nil {
+	//	Run the appropriate middleware,
+	//	if the server configuration has one.
+	if s.config.Middlewares.Creator != nil {
+		if err := s.config.Middlewares.Creator(r); err != nil {
 			return err
 		}
 	}
@@ -324,7 +332,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 	}
 
 	//	Save the session for future use
-	s.sessions.Set(token, session, s.config.Expiration)
+	s.sessions.Set(hostname, session, s.config.Expiration)
 
 	//	Accept a new stream from the client.
 	stream, err := acceptStream(session)
@@ -341,7 +349,7 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 			}
 
 			// delete the session
-			s.sessions.Delete(token)
+			s.sessions.Delete(hostname)
 		}
 	}()
 
@@ -357,11 +365,11 @@ func (s *Server) tunnelCreationHandler(w http.ResponseWriter, r *http.Request) e
 
 	// Save this tunnel
 	tunnel := tunnel{
-		dec:   json.NewDecoder(stream),
-		enc:   json.NewEncoder(stream),
-		conn:  stream,
-		token: token,
-		host:  hostname,
+		dec:  json.NewDecoder(stream),
+		enc:  json.NewEncoder(stream),
+		conn: stream,
+		//	token: token,
+		host: hostname,
 	}
 
 	s.tunnels.Set(hostname, tunnel, s.config.Expiration)
@@ -404,6 +412,14 @@ func acceptHandshake(conn net.Conn) error {
 //	if their hostname, already has a tunnel.
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
+	//	Run the appropriate middleware,
+	//	if the server configuration has one.
+	if s.config.Middlewares.Access != nil {
+		if err := s.config.Middlewares.Access(r); err != nil {
+			return err
+		}
+	}
+
 	//	Check whether it's a Websocket connection.
 	if r.Method == http.MethodGet &&
 		headerContains(r.Header["Connection"], "upgrade") &&
@@ -414,7 +430,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	s.log.Println("Handling incoming HTTP request")
 
-	stream, err := s.dial(r.URL.Hostname(), Protocol{
+	hostname := getHostname(r)
+
+	stream, err := s.dial(hostname, Protocol{
 		Action: RequestSession,
 		Type:   HTTP,
 	})
@@ -452,7 +470,7 @@ func (s *Server) dial(host string, message Protocol) (net.Conn, error) {
 		return nil, err
 	}
 
-	session, err := s.getSessionFromTunnel(tunnel)
+	session, err := s.getSessionFromTunnel(*tunnel)
 	if err != nil {
 		return nil, err
 	}
@@ -475,17 +493,19 @@ func (s *Server) dial(host string, message Protocol) (net.Conn, error) {
 }
 
 //	Fetches the saved tunnel corresponding to supplied hostname.
-func (s *Server) getTunnel(host string) (tunnel, error) {
+func (s *Server) getTunnel(host string) (*tunnel, error) {
 
 	s.log.Println("Fetching tunnel corresponding to host: ", host)
 
 	// Get the tunnel associated with that host
 	payload, exists := s.tunnels.Get(host)
 	if !exists {
-		return tunnel{}, ErrTunnelNotFound
+		return nil, ErrTunnelNotFound
 	}
 
-	return payload.(tunnel), nil
+	tunnel := payload.(tunnel)
+
+	return &tunnel, nil
 }
 
 //	First fetches the tunnel from given hostname,
@@ -501,7 +521,7 @@ func (s *Server) getSessionFromHost(host string) (*yamux.Session, error) {
 	}
 
 	//	Get the session associated with this token
-	fetchedSession, exists := s.sessions.Get(tunnel.token)
+	fetchedSession, exists := s.sessions.Get(tunnel.host)
 	if !exists {
 		return nil, ErrSessionNotFound
 	}
@@ -515,7 +535,7 @@ func (s *Server) getSessionFromTunnel(t tunnel) (*yamux.Session, error) {
 	s.log.Println("Fetching session corresponding to host: ", t.host)
 
 	//	Get the session associated with this token
-	fetchedSession, exists := s.sessions.Get(t.token)
+	fetchedSession, exists := s.sessions.Get(t.host)
 	if !exists {
 		return nil, ErrSessionNotFound
 	}
@@ -578,7 +598,7 @@ func (s *Server) handleWSConnection(w http.ResponseWriter, r *http.Request) erro
 	}
 
 	// Get the host from the request.
-	host := r.URL.Hostname()
+	host := getHostname(r)
 
 	//	Start a stream with the client.
 	stream, err := s.dial(host, Protocol{

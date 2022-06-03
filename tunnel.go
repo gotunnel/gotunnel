@@ -17,7 +17,7 @@ const (
 	Disconnected // keep it always last
 
 	// ClientIdentifierHeader is header carrying information about tunnel identifier.
-	IdentifierHeader = "x-gotunnel-identifier"
+	//	IdentifierHeader = "x-gotunnel-identifier"
 
 	// Connected is message sent by server to client when control connection was established.
 	TunnelConnected = "200 gotunnel established"
@@ -48,7 +48,7 @@ type tunnel struct {
 	port string
 
 	// Authentication token sent by client to authorize the tunnel.
-	token string
+	//	token string
 
 	// Records whether the tunnel is already closed or not.
 	closed bool

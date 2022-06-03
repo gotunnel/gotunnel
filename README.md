@@ -12,11 +12,10 @@ Importable Go library that can be embedded inside your code to expose your local
 - In-memory cache for storing tunnels and sessions.
 - Connection Callbacks
 - Auto-Reconnect the Client
+- Authorized Whitelists and Blacklists for Hostnames
 
 ### Coming Soon
 
-- Authorized Key Whitelists
-- Registration of Reserved Hosts
 - Rate Limiting Per Connection
 - Load Balancer for the Server
 - SSH Tunnels

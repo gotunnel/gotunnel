@@ -30,6 +30,16 @@ const (
 type Protocol struct {
 	Type   Type
 	Action Action
+
+	//	Port of the locally running service.
+	//	Example: a file server.
+	//
+	//	Since, we are following IP based forwarding,
+	//	and not port based forwarding, we can skip this.
+	//
+	//	Server should always get incoming request on port 80.
+	//	And the client should manually specify its local service port to tunnel the request to.
+	//	Port int
 }
 
 //	Matches and returns the protocol type from network string.

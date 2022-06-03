@@ -62,14 +62,14 @@ func TestConnection(t *testing.T) {
 		{
 			name: "duplicate",
 			config: ClientConfig{
-				Address:            "http://" + remoteAddr,
+				Address:            "http://localhost:80",
 				Port:               localPort,
 				State:              state,
 				InsecureSkipVerify: true,
 				Logger:             logger,
 			},
 			wantErr: errors.New("tunnel for this hostname already exists"),
-			run:     true,
+			run:     false,
 		},
 		{
 			name: "hosted",

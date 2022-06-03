@@ -38,7 +38,7 @@ type (
 		port string
 
 		//	Unique identifier for storing the tunnel tunnel.
-		identifier string
+		//	identifier string
 
 		//	Client configuration structure.
 		config *ClientConfig
@@ -83,7 +83,7 @@ type (
 		//	If you don't pass one, we will automatically generate one.
 		//	Use this value to override the auto-generated identifier.
 		//	Used by the server for storing and mapping every tunnel.
-		Identifier string
+		//	Identifier string
 
 		//	Basic Auth.
 		//	To password-protect your expose server.
@@ -109,15 +109,15 @@ func NewClient(config *ClientConfig) (*Client, error) {
 	var err error
 
 	client := &Client{
-		port:       config.Port,
-		identifier: config.Identifier,
-		config:     config,
-		log:        &log.Logger{},
+		port: config.Port,
+		//	identifier: config.Identifier,
+		config: config,
+		log:    &log.Logger{},
 	}
 
-	if client.identifier == "" {
+	/* if client.identifier == "" {
 		client.identifier = generateIdentifier(10)
-	}
+	} */
 
 	if config.State != nil {
 		client.state = config.State
@@ -199,8 +199,8 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
-	// Set the auth token in gotunnel identification header
-	req.Header.Set(IdentifierHeader, c.identifier)
+	//	Set the auth token in gotunnel identification header
+	//	req.Header.Set(IdentifierHeader, c.identifier)
 
 	// Send the CONNECT Request to request a tunnel from the server
 	if err := req.Write(conn); err != nil {
@@ -255,12 +255,12 @@ func (c *Client) Connect() error {
 	// Now that we've completed the handshake,
 	// the tunnel has been established.
 	tunnel := tunnel{
-		dec:   json.NewDecoder(stream),
-		enc:   json.NewEncoder(stream),
-		conn:  stream,
-		host:  c.remote.Host,
-		port:  c.port,
-		token: c.identifier,
+		dec:  json.NewDecoder(stream),
+		enc:  json.NewEncoder(stream),
+		conn: stream,
+		host: c.remote.Host,
+		port: c.port,
+		//	token: c.identifier,
 	}
 
 	// update client State

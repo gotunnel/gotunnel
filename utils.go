@@ -142,3 +142,16 @@ func generateIdentifier(n int) string {
 	}
 	return string(b)
 }
+
+func getHostname(r *http.Request) string {
+
+	//	If it's not an absolute URL,
+	//	then use the Host from Request struct.
+	//	It is in the form `host:port`.
+	//	See: http://golang.org/pkg/http/#Request
+	if !r.URL.IsAbs() {
+		return r.Host
+	}
+
+	return r.URL.Hostname()
+}
